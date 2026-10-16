@@ -1053,6 +1053,13 @@ fn element_entry(node: &crate::ax::tree::AXNode, snapshot_id: Option<u32>) -> se
     } else {
         entry["display_only"] = serde_json::Value::Bool(true);
     }
+    // Developer-assigned AXIdentifier, kept separate from `label` (which only
+    // falls back to it). Web content identifiers are unstable and excluded.
+    if !node.in_web_content {
+        if let Some(id) = node.identifier.as_deref().filter(|id| !id.trim().is_empty()) {
+            entry["id"] = serde_json::Value::String(id.to_owned());
+        }
+    }
     if let Some(label) = label {
         entry["label"] = serde_json::Value::String(label);
     }
@@ -1560,6 +1567,28 @@ mod tests {
         assert_eq!(entry["max"], 8.0);
         assert_eq!(entry["enabled"], true);
         assert_eq!(entry["selected"], false);
+    }
+
+    #[test]
+    fn element_id_is_structural_and_excluded_from_web_content() {
+        let mut nodes = vec![node(Some(0), "AXButton", Some("Submit"), 2, None, None, vec![])];
+        nodes[0].identifier = Some("submit-note".into());
+        let entry = &build_elements_array_with_token(&nodes, None)[0];
+        assert_eq!(entry["id"], "submit-note");
+        nodes[0].identifier = Some("  ".into());
+        assert!(build_elements_array_with_token(&nodes, None)[0].get("id").is_none());
+        nodes[0].identifier = Some("web-id".into());
+        nodes[0].in_web_content = true;
+        assert!(build_elements_array_with_token(&nodes, None)[0].get("id").is_none());
+    }
+
+    #[test]
+    fn display_only_rows_carry_their_id() {
+        let mut nodes = vec![node(None, "AXStaticText", Some("Submission status"), 2, None, None, vec![])];
+        nodes[0].identifier = Some("submission-status".into());
+        let rows = build_observation_elements_array(&nodes);
+        assert_eq!(rows[0]["id"], "submission-status");
+        assert_eq!(rows[0]["display_only"], true);
     }
 
     #[test]

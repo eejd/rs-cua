@@ -362,6 +362,7 @@ fn invalid_predicate_message(expect: &[StatePredicate]) -> Option<String> {
             for (name, value) in [
                 ("role", element.selector.role.as_deref()),
                 ("label_contains", element.selector.label_contains.as_deref()),
+                ("id", element.selector.id.as_deref()),
             ] {
                 if value.is_some_and(|value| value.trim().is_empty()) {
                     return Some(format!(
@@ -517,7 +518,10 @@ fn evaluate_element(
             None,
         );
     }
-    if (predicate.selector.role.is_none() && predicate.selector.label_contains.is_none())
+    if (predicate.selector.role.is_none()
+        && predicate.selector.label_contains.is_none()
+        && predicate.selector.id.is_none())
+        || predicate.selector.id.as_deref().is_some_and(|value| value.trim().is_empty())
         || predicate
             .selector
             .role
@@ -683,6 +687,11 @@ fn selector_matches(selector: &cua_driver_contract::ElementSelector, element: &V
             return false;
         }
     }
+    if let Some(id) = selector.id.as_deref() {
+        if element.get("id").and_then(Value::as_str) != Some(id) {
+            return false;
+        }
+    }
     if let Some(label) = selector.label_contains.as_deref() {
         let needle = label.to_lowercase();
         if !element
@@ -756,6 +765,7 @@ fn project_element(element: &Value) -> Value {
     for key in [
         "element_index",
         "role",
+        "id",
         "label",
         "value",
         "enabled",
@@ -821,6 +831,7 @@ mod tests {
                 selector: ElementSelector {
                     role: Some("checkbox".into()),
                     label_contains: Some(label.into()),
+                    id: None,
                 },
                 exists: Some(true),
                 value_equals: Some("1".into()),
@@ -904,6 +915,7 @@ mod tests {
                 selector: ElementSelector {
                     role: None,
                     label_contains: Some(label.into()),
+                    id: None,
                 },
                 exists: Some(true),
                 value_equals: value_equals.map(Into::into),
@@ -928,6 +940,46 @@ mod tests {
             })]),
         );
         assert_eq!(outcomes[0].status, VerificationStatus::Satisfied);
+    }
+
+    fn by_id(id: &str, value_equals: Option<&str>) -> StatePredicate {
+        StatePredicate {
+            window: None,
+            element: Some(ElementPredicate {
+                selector: ElementSelector {
+                    role: None,
+                    label_contains: None,
+                    id: Some(id.into()),
+                },
+                exists: Some(true),
+                value_equals: value_equals.map(Into::into),
+                enabled: None,
+                selected: None,
+            }),
+        }
+    }
+
+    #[test]
+    fn id_selects_display_only_text_exactly() {
+        let rows = vec![
+            json!({"role": "AXStaticText", "id": "submission-status", "label": "Submission status",
+                   "value": "Submitted", "display_only": true}),
+            json!({"role": "AXStaticText", "id": "submission-status-detail",
+                   "label": "Submission status detail", "value": "x", "display_only": true}),
+        ];
+        let outcomes = evaluate_predicates(&[by_id("submission-status", Some("Submitted"))], &observed(rows.clone()));
+        assert_eq!(outcomes[0].status, VerificationStatus::Satisfied);
+        // Exact, not a prefix/substring match.
+        let outcomes = evaluate_predicates(&[by_id("submission-status", Some("nope"))], &observed(rows.clone()));
+        assert_eq!(outcomes[0].status, VerificationStatus::Unsatisfied);
+        let outcomes = evaluate_predicates(&[by_id("submission", None)], &observed(rows));
+        assert_ne!(outcomes[0].status, VerificationStatus::Satisfied);
+    }
+
+    #[test]
+    fn id_only_selector_is_valid_and_blank_id_is_not() {
+        assert!(invalid_predicate_message(&[by_id(" ", None)]).is_some());
+        assert!(invalid_predicate_message(&[by_id("evidence-note", None)]).is_none());
     }
 
     #[test]
@@ -1124,6 +1176,7 @@ mod tests {
                 selector: ElementSelector {
                     role: Some("button".into()),
                     label_contains: Some("Missing".into()),
+                    id: None,
                 },
                 exists: Some(false),
                 value_equals: None,

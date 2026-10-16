@@ -104,6 +104,11 @@ pub struct ElementSelector {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(schema_with = "nonempty_string_schema")]
     pub label_contains: Option<String>,
+    /// Exact match on the developer-assigned element identifier
+    /// (`WindowElement.id`; macOS `AXIdentifier`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(schema_with = "nonempty_string_schema")]
+    pub id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, uniffi::Record)]
