@@ -267,6 +267,11 @@ pub struct WindowElement {
     pub depth: u32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub element_token: Option<String>,
+    /// Developer-assigned identifier published by the platform accessibility
+    /// provider (macOS `AXIdentifier`). Absent when the element has none or is
+    /// web content.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub label: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
