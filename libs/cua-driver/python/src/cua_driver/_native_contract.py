@@ -3775,19 +3775,22 @@ class _UniffiFfiConverterTypeElementFrame(_UniffiConverterRustBuffer):
 
 @dataclass
 class ElementSelector:
-    def __init__(self, *, role:typing.Optional[str], label_contains:typing.Optional[str]):
+    def __init__(self, *, role:typing.Optional[str], label_contains:typing.Optional[str], id:typing.Optional[str]):
         self.role = role
         self.label_contains = label_contains
+        self.id = id
 
 
 
 
     def __str__(self):
-        return "ElementSelector(role={}, label_contains={})".format(self.role, self.label_contains)
+        return "ElementSelector(role={}, label_contains={}, id={})".format(self.role, self.label_contains, self.id)
     def __eq__(self, other):
         if self.role != other.role:
             return False
         if self.label_contains != other.label_contains:
+            return False
+        if self.id != other.id:
             return False
         return True
 
@@ -3797,17 +3800,20 @@ class _UniffiFfiConverterTypeElementSelector(_UniffiConverterRustBuffer):
         return ElementSelector(
             role=_UniffiFfiConverterOptionalString.read(buf),
             label_contains=_UniffiFfiConverterOptionalString.read(buf),
+            id=_UniffiFfiConverterOptionalString.read(buf),
         )
 
     @staticmethod
     def check_lower(value):
         _UniffiFfiConverterOptionalString.check_lower(value.role)
         _UniffiFfiConverterOptionalString.check_lower(value.label_contains)
+        _UniffiFfiConverterOptionalString.check_lower(value.id)
 
     @staticmethod
     def write(value, buf):
         _UniffiFfiConverterOptionalString.write(value.role, buf)
         _UniffiFfiConverterOptionalString.write(value.label_contains, buf)
+        _UniffiFfiConverterOptionalString.write(value.id, buf)
 
 class _UniffiFfiConverterOptionalBoolean(_UniffiConverterRustBuffer):
     @classmethod
@@ -8209,11 +8215,12 @@ class _UniffiFfiConverterOptionalTypeElementFrame(_UniffiConverterRustBuffer):
 
 @dataclass
 class WindowElement:
-    def __init__(self, *, element_index:int, role:str, depth:int, element_token:typing.Optional[str], label:typing.Optional[str], value:typing.Optional[str], value_description:typing.Optional[str], enabled:typing.Optional[bool], selected:typing.Optional[bool], in_web_content:typing.Optional[bool], actions:typing.Optional[typing.List[str]], parent_index:typing.Optional[int], frame:typing.Optional[ElementFrame], min:typing.Optional[float], max:typing.Optional[float]):
+    def __init__(self, *, element_index:int, role:str, depth:int, element_token:typing.Optional[str], id:typing.Optional[str], label:typing.Optional[str], value:typing.Optional[str], value_description:typing.Optional[str], enabled:typing.Optional[bool], selected:typing.Optional[bool], in_web_content:typing.Optional[bool], actions:typing.Optional[typing.List[str]], parent_index:typing.Optional[int], frame:typing.Optional[ElementFrame], min:typing.Optional[float], max:typing.Optional[float]):
         self.element_index = element_index
         self.role = role
         self.depth = depth
         self.element_token = element_token
+        self.id = id
         self.label = label
         self.value = value
         self.value_description = value_description
@@ -8230,7 +8237,7 @@ class WindowElement:
 
 
     def __str__(self):
-        return "WindowElement(element_index={}, role={}, depth={}, element_token={}, label={}, value={}, value_description={}, enabled={}, selected={}, in_web_content={}, actions={}, parent_index={}, frame={}, min={}, max={})".format(self.element_index, self.role, self.depth, self.element_token, self.label, self.value, self.value_description, self.enabled, self.selected, self.in_web_content, self.actions, self.parent_index, self.frame, self.min, self.max)
+        return "WindowElement(element_index={}, role={}, depth={}, element_token={}, id={}, label={}, value={}, value_description={}, enabled={}, selected={}, in_web_content={}, actions={}, parent_index={}, frame={}, min={}, max={})".format(self.element_index, self.role, self.depth, self.element_token, self.id, self.label, self.value, self.value_description, self.enabled, self.selected, self.in_web_content, self.actions, self.parent_index, self.frame, self.min, self.max)
     def __eq__(self, other):
         if self.element_index != other.element_index:
             return False
@@ -8239,6 +8246,8 @@ class WindowElement:
         if self.depth != other.depth:
             return False
         if self.element_token != other.element_token:
+            return False
+        if self.id != other.id:
             return False
         if self.label != other.label:
             return False
@@ -8272,6 +8281,7 @@ class _UniffiFfiConverterTypeWindowElement(_UniffiConverterRustBuffer):
             role=_UniffiFfiConverterString.read(buf),
             depth=_UniffiFfiConverterUInt32.read(buf),
             element_token=_UniffiFfiConverterOptionalString.read(buf),
+            id=_UniffiFfiConverterOptionalString.read(buf),
             label=_UniffiFfiConverterOptionalString.read(buf),
             value=_UniffiFfiConverterOptionalString.read(buf),
             value_description=_UniffiFfiConverterOptionalString.read(buf),
@@ -8291,6 +8301,7 @@ class _UniffiFfiConverterTypeWindowElement(_UniffiConverterRustBuffer):
         _UniffiFfiConverterString.check_lower(value.role)
         _UniffiFfiConverterUInt32.check_lower(value.depth)
         _UniffiFfiConverterOptionalString.check_lower(value.element_token)
+        _UniffiFfiConverterOptionalString.check_lower(value.id)
         _UniffiFfiConverterOptionalString.check_lower(value.label)
         _UniffiFfiConverterOptionalString.check_lower(value.value)
         _UniffiFfiConverterOptionalString.check_lower(value.value_description)
@@ -8309,6 +8320,7 @@ class _UniffiFfiConverterTypeWindowElement(_UniffiConverterRustBuffer):
         _UniffiFfiConverterString.write(value.role, buf)
         _UniffiFfiConverterUInt32.write(value.depth, buf)
         _UniffiFfiConverterOptionalString.write(value.element_token, buf)
+        _UniffiFfiConverterOptionalString.write(value.id, buf)
         _UniffiFfiConverterOptionalString.write(value.label, buf)
         _UniffiFfiConverterOptionalString.write(value.value, buf)
         _UniffiFfiConverterOptionalString.write(value.value_description, buf)

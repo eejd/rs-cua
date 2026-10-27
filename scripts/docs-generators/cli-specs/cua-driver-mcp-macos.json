@@ -179,6 +179,11 @@
           "selector": {
            "additionalProperties": false,
            "properties": {
+            "id": {
+             "description": "Exact match on the developer-assigned element identifier\n(`WindowElement.id`; macOS `AXIdentifier`).",
+             "minLength": 1,
+             "type": "string"
+            },
             "label_contains": {
              "minLength": 1,
              "type": "string"
