@@ -825,24 +825,6 @@ fn describe_available(options: &[PopupOption]) -> String {
         .join(", ")
 }
 
-/// Whether the popup's menu is open right now: an `AXMenu` child that already
-/// lists items. A closed AppKit popup has an empty `AXMenu` (or none), and a
-/// closed Chromium popup lists only its selected item directly.
-fn popup_menu_is_open(popup: AXUIElementRef) -> bool {
-    let mut open = false;
-    for child in unsafe { copy_children(popup) } {
-        if unsafe { copy_string_attr(child, "AXRole") }.as_deref() == Some("AXMenu") {
-            let items = unsafe { copy_children(child) };
-            open |= !items.is_empty();
-            for item in items {
-                unsafe { CFRelease(item as _) };
-            }
-        }
-        unsafe { CFRelease(child as _) };
-    }
-    open
-}
-
 /// Close a menu this call opened, without choosing anything. `AXCancel` is
 /// enough for AppKit; Chromium's menu ignores it, so fall back to Escape sent
 /// to the app (the open menu is what receives it).
@@ -855,7 +837,7 @@ fn dismiss_popup_menu(popup: AXUIElementRef, pid: i32) {
         unsafe { CFRelease(child as _) };
     }
     let deadline = std::time::Instant::now() + POPUP_CLOSE_TIMEOUT;
-    while popup_menu_is_open(popup) {
+    while super::menu_state::menu_items_observable(popup) {
         if std::time::Instant::now() >= deadline {
             let _ = crate::input::keyboard::press_key_no_auth(pid, "escape", &[]);
             std::thread::sleep(POPUP_CLOSE_TIMEOUT);
@@ -948,7 +930,7 @@ fn select_chromium_popup_by_typeahead(
     let wanted = value.trim();
     if wanted.is_empty()
         || crate::apps::frontmost_pid() == Some(pid)
-        || popup_menu_is_open(popup)
+        || super::menu_state::menu_items_observable(popup)
         || !is_chromium_popup_owner(pid)
     {
         return None;
@@ -1036,7 +1018,7 @@ fn select_popup_option(
         // the messaging timeout fires), so run it on its own thread and read
         // the items as soon as they appear: the menu, and with it the key
         // focus it holds, stays open for the shortest time.
-        let already_open = popup_menu_is_open(element);
+        let already_open = super::menu_state::menu_items_observable(element);
         let closed_titles = if already_open {
             Vec::new()
         } else {

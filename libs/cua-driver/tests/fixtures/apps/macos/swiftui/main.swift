@@ -53,6 +53,10 @@ let kPopupStateAID = "lbl-popover-state"
 let kPopupTextAID = "txt-popover-body"
 let kPopupMarker = "POPOVER_MARKER_v1"
 let kExitButtonAID = "btn-exit"
+let kLibraryCreateAID = "library-create"
+let kLibraryCreateItemAID = "library-create-item"
+let kLibraryCreateNoteAID = "library-create-note"
+let kLibraryCreateCollectionAID = "library-create-collection"
 
 // MARK: - App entry
 
@@ -230,6 +234,19 @@ struct HarnessRootView: View {
                     .accessibilityIdentifier(kExitButtonAID)
             }
             .padding(20)
+        }
+        .toolbar {
+            ToolbarItem {
+                Menu("Create") {
+                    Button("New Item") { menuAction = "New Item" }
+                        .accessibilityIdentifier(kLibraryCreateItemAID)
+                    Button("New Note") { menuAction = "New Note" }
+                        .accessibilityIdentifier(kLibraryCreateNoteAID)
+                    Button("New Collection") { menuAction = "New Collection" }
+                        .accessibilityIdentifier(kLibraryCreateCollectionAID)
+                }
+                .accessibilityIdentifier(kLibraryCreateAID)
+            }
         }
     }
 
