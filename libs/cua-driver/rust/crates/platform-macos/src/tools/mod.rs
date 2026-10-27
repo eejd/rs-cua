@@ -14,6 +14,7 @@ mod launch_app;
 mod list_apps;
 mod list_windows;
 mod menu_equivalent;
+mod menu_state;
 mod press_key;
 mod right_click;
 mod scroll;

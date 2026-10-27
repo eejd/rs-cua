@@ -1718,6 +1718,15 @@ fn perform_ax_click(
     if !foreground {
         prime_key_window_for_background_press(pid, window_id, ax_action);
     }
+    // Baseline for actions that open a menu; a pre-existing open menu is not
+    // evidence that this action opened one.
+    let opens_menu = ax_action == "AXShowMenu"
+        || (ax_action == "AXPress"
+            && matches!(
+                role.as_str(),
+                "AXMenuButton" | "AXPopUpButton" | "AXMenuBarItem"
+            ));
+    let menu_baseline = opens_menu.then(|| super::menu_state::menu_items_observable(element));
     let err = unsafe { crate::ax::bindings::perform_action(element, ax_action) };
     if err != crate::ax::bindings::kAXErrorSuccess {
         // Checked before the row-selection fallback, which writes AXSelected
@@ -1767,6 +1776,13 @@ fn perform_ax_click(
 
     let mut summary = format!("✅ Performed {ax_action} on [{idx}] {role} \"{title}\".");
 
+    // A menu-opening action returns before the provider publishes the menu's
+    // items; observe the addressed element's own menu (read-only, bounded) so
+    // the next snapshot contains it.
+    let menu_publication = menu_baseline.map(|already_observable| {
+        super::menu_state::wait_for_menu_publication(element, already_observable)
+    });
+
     // AXPopUpButton: list available options, redirect to set_value.
     if role == "AXPopUpButton" {
         let children = unsafe { copy_children(element) };
@@ -1795,7 +1811,7 @@ fn perform_ax_click(
             if !options.is_empty() {
                 let opt_list = options.join(", ");
                 summary.push_str(
-                    "\n\nThis is a popup/select button; its menu is open. Choose an item \
+                    "\n\nThis is a popup/select button; read its current menu state. Choose an item \
                      by clicking its AXMenuItem from a fresh get_window_state, or select \
                      in one call with:\n  set_value(pid, element_token, value)\n\
                      Available options: [",
@@ -1804,6 +1820,22 @@ fn perform_ax_click(
                 summary.push(']');
             }
         }
+    }
+
+    if let Some(publication) = menu_publication {
+        summary.push_str(match publication {
+            super::menu_state::MenuPublication::Observed => {
+                "\nMenu items became observable after the action."
+            }
+            super::menu_state::MenuPublication::NotObserved => {
+                "\nMenu items were not observed within the 1000 ms observation budget; \
+                 read fresh state before acting on a menu."
+            }
+            super::menu_state::MenuPublication::AlreadyObservable => {
+                "\nMenu items were already observable before the action; read fresh state \
+                 to determine whether the menu remains open."
+            }
+        });
     }
 
     // Advertised-action warning: non-fatal but surfaces likely no-ops. Also the

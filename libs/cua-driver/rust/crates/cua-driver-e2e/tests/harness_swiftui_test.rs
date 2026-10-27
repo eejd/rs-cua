@@ -400,3 +400,134 @@ fn harness_swiftui_popover_foreground() {
         }
     });
 }
+
+/// The element line carrying exactly `id=<id>` (not an `id=<id>-suffix` peer).
+fn line_for_id<'a>(tree: &'a str, id: &str) -> Option<&'a str> {
+    let exact_space = format!("id={id} ");
+    let exact_close = format!("id={id}]");
+    tree.lines()
+        .find(|line| line.contains(&exact_space) || line.contains(&exact_close))
+}
+
+/// A background AXPress on a SwiftUI `Menu` (AXMenuButton) must return only
+/// after the menu's items are observable: the very first snapshot after the
+/// click contains the menu and every item, with no caller sleep or retry.
+#[test]
+#[ignore]
+fn harness_swiftui_menu_press_publishes_items_background() {
+    run_background_case(
+        "menu_open",
+        DriverRoute::MacosAxAction,
+        |pid, wid, driver| {
+            let snapshot = |driver: &mut McpDriver| {
+                driver.call(
+                    "get_window_state",
+                    serde_json::json!({
+                        "pid": pid as i64,
+                        "window_id": wid,
+                        "capture_mode": "ax",
+                        "include_screenshot": false,
+                        "max_elements": 1000
+                    }),
+                )
+            };
+            let items = [
+                "library-create-item",
+                "library-create-note",
+                "library-create-collection",
+            ];
+
+            let pre = snapshot(driver);
+            let button = line_for_id(pre.tree_text(), "library-create")
+                .expect("library-create toolbar menu not found");
+            assert!(
+                button.contains("AXMenuButton"),
+                "library-create is not an AXMenuButton: {button}"
+            );
+            assert!(
+                !has_id(pre.tree_text(), "library-create-item"),
+                "menu items were published before the menu was opened"
+            );
+            let index = element_index_by_id(pre.tree_text(), "library-create")
+                .expect("library-create element_index not found");
+
+            let click = driver.call(
+                "click",
+                serde_json::json!({
+                    "pid": pid as i64,
+                    "window_id": wid,
+                    "element_token": pre.element_token(index),
+                    "action": "press",
+                    "delivery_mode": "background"
+                }),
+            );
+            assert!(
+                !click.is_error(),
+                "SwiftUI menu press failed: {}",
+                click.text()
+            );
+
+            // Exactly one snapshot, immediately: no sleep, tool call or retry.
+            let open = snapshot(driver);
+            let tree = open.tree_text();
+            assert!(
+                tree.contains("AXMenu "),
+                "no AXMenu in the first snapshot after the press:\n{tree}"
+            );
+            for id in items {
+                assert!(
+                    has_id(tree, id),
+                    "{id} missing from the first snapshot after the press:\n{tree}"
+                );
+            }
+
+            // Visual evidence of the open menu; screenshot-only keeps tokens.
+            let shot = driver.call(
+                "get_window_state",
+                serde_json::json!({
+                    "pid": pid as i64,
+                    "window_id": wid,
+                    "include_accessibility_tree": false
+                }),
+            );
+            assert!(
+                !shot.is_error(),
+                "open-menu screenshot failed: {}",
+                shot.text()
+            );
+
+            let item_index = element_index_by_id(tree, "library-create-item")
+                .expect("New Item element_index not found");
+            let select = driver.call(
+                "click",
+                serde_json::json!({
+                    "pid": pid as i64,
+                    "window_id": wid,
+                    "element_token": open.element_token(item_index),
+                    "action": "press",
+                    "delivery_mode": "background"
+                }),
+            );
+            assert!(
+                !select.is_error(),
+                "New Item selection failed: {}",
+                select.text()
+            );
+
+            let deadline = std::time::Instant::now() + Duration::from_secs(3);
+            loop {
+                if snapshot(driver)
+                    .tree_text()
+                    .contains("menu_action=New Item")
+                {
+                    break;
+                }
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "selecting New Item did not set menu_action=New Item"
+                );
+                std::thread::sleep(Duration::from_millis(100));
+            }
+        },
+    );
+}

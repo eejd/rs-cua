@@ -462,6 +462,16 @@
     }
    },
    {
+    "id": "menu_button",
+    "kind": "menu_button",
+    "description": "Standard SwiftUI toolbar Menu. A background AXPress on the AXMenuButton must publish its menu items before the action returns.",
+    "controls": {
+     "button_aid": "library-create",
+     "item_aid": "library-create-item",
+     "action_label_aid": "lbl-menu-action"
+    }
+   },
+   {
     "id": "popover",
     "kind": "swiftui_popover",
     "description": "SwiftUI .popover() \u2014 SwiftUI's analogue of WinUI3 CommandBarFlyout / XAML Popup. Tests popover/flyout enumeration via AX (a separate AX subtree, but same NSWindow).",
