@@ -399,6 +399,7 @@ if [[ "${SUITE}" == native || "${SUITE}" == all ]]; then
 macos-swiftui-ax-tree-ax-not-applicable|harness_swiftui_smoke
 macos-swiftui-left-click-ax-background|harness_swiftui_counter_background
 macos-swiftui-set-value-ax-background|harness_swiftui_set_value_background
+macos-swiftui-menu-open-ax-background|harness_swiftui_menu_press_publishes_items_background
 macos-swiftui-popover-open-ax-foreground|harness_swiftui_popover_foreground
 macos-swiftui-verify-state-ax-not-applicable|harness_swiftui_verify_state
 EOF

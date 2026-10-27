@@ -2333,7 +2333,12 @@ const FfiConverterTypeElementFrame = (() => {
 
 export type ElementSelector = {
     role?: string,
-    labelContains?: string
+    labelContains?: string,
+    /**
+     * Exact match on the developer-assigned element identifier
+     * (`WindowElement.id`; macOS `AXIdentifier`).
+     */
+    id?: string
 }
 
 /**
@@ -2358,16 +2363,19 @@ const FfiConverterTypeElementSelector = (() => {
         read(from: RustBuffer): TypeName {
             return {
                 role: FfiConverterOptionalString.read(from),
-                labelContains: FfiConverterOptionalString.read(from)
+                labelContains: FfiConverterOptionalString.read(from),
+                id: FfiConverterOptionalString.read(from)
             };
         }
         write(value: TypeName, into: RustBuffer): void {
             FfiConverterOptionalString.write(value.role, into);
             FfiConverterOptionalString.write(value.labelContains, into);
+            FfiConverterOptionalString.write(value.id, into);
         }
         allocationSize(value: TypeName): number {
             return FfiConverterOptionalString.allocationSize(value.role) +
-             FfiConverterOptionalString.allocationSize(value.labelContains);
+             FfiConverterOptionalString.allocationSize(value.labelContains) +
+             FfiConverterOptionalString.allocationSize(value.id);
 
         }
     };
@@ -6326,6 +6334,12 @@ export type WindowElement = {
     role: string,
     depth: number,
     elementToken?: string,
+    /**
+     * Developer-assigned identifier published by the platform accessibility
+     * provider (macOS `AXIdentifier`). Absent when the element has none or is
+     * web content.
+     */
+    id?: string,
     label?: string,
     value?: string,
     valueDescription?: string,
@@ -6364,6 +6378,7 @@ const FfiConverterTypeWindowElement = (() => {
                 role: FfiConverterString.read(from),
                 depth: FfiConverterUInt32.read(from),
                 elementToken: FfiConverterOptionalString.read(from),
+                id: FfiConverterOptionalString.read(from),
                 label: FfiConverterOptionalString.read(from),
                 value: FfiConverterOptionalString.read(from),
                 valueDescription: FfiConverterOptionalString.read(from),
@@ -6382,6 +6397,7 @@ const FfiConverterTypeWindowElement = (() => {
             FfiConverterString.write(value.role, into);
             FfiConverterUInt32.write(value.depth, into);
             FfiConverterOptionalString.write(value.elementToken, into);
+            FfiConverterOptionalString.write(value.id, into);
             FfiConverterOptionalString.write(value.label, into);
             FfiConverterOptionalString.write(value.value, into);
             FfiConverterOptionalString.write(value.valueDescription, into);
@@ -6399,6 +6415,7 @@ const FfiConverterTypeWindowElement = (() => {
              FfiConverterString.allocationSize(value.role) +
              FfiConverterUInt32.allocationSize(value.depth) +
              FfiConverterOptionalString.allocationSize(value.elementToken) +
+             FfiConverterOptionalString.allocationSize(value.id) +
              FfiConverterOptionalString.allocationSize(value.label) +
              FfiConverterOptionalString.allocationSize(value.value) +
              FfiConverterOptionalString.allocationSize(value.valueDescription) +

@@ -521,7 +521,11 @@ fn evaluate_element(
     if (predicate.selector.role.is_none()
         && predicate.selector.label_contains.is_none()
         && predicate.selector.id.is_none())
-        || predicate.selector.id.as_deref().is_some_and(|value| value.trim().is_empty())
+        || predicate
+            .selector
+            .id
+            .as_deref()
+            .is_some_and(|value| value.trim().is_empty())
         || predicate
             .selector
             .role
@@ -967,10 +971,16 @@ mod tests {
             json!({"role": "AXStaticText", "id": "submission-status-detail",
                    "label": "Submission status detail", "value": "x", "display_only": true}),
         ];
-        let outcomes = evaluate_predicates(&[by_id("submission-status", Some("Submitted"))], &observed(rows.clone()));
+        let outcomes = evaluate_predicates(
+            &[by_id("submission-status", Some("Submitted"))],
+            &observed(rows.clone()),
+        );
         assert_eq!(outcomes[0].status, VerificationStatus::Satisfied);
         // Exact, not a prefix/substring match.
-        let outcomes = evaluate_predicates(&[by_id("submission-status", Some("nope"))], &observed(rows.clone()));
+        let outcomes = evaluate_predicates(
+            &[by_id("submission-status", Some("nope"))],
+            &observed(rows.clone()),
+        );
         assert_eq!(outcomes[0].status, VerificationStatus::Unsatisfied);
         let outcomes = evaluate_predicates(&[by_id("submission", None)], &observed(rows));
         assert_ne!(outcomes[0].status, VerificationStatus::Satisfied);
