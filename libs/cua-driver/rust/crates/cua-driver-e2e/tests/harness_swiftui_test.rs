@@ -409,6 +409,12 @@ fn line_for_id<'a>(tree: &'a str, id: &str) -> Option<&'a str> {
         .find(|line| line.contains(&exact_space) || line.contains(&exact_close))
 }
 
+/// The `[N]` element index at the start of a tree line (`- [N] AXRole ...`).
+fn line_index(line: &str) -> Option<u64> {
+    let start = line.find('[')? + 1;
+    line[start..line.find(']')?].parse().ok()
+}
+
 /// A background AXPress on a SwiftUI `Menu` (AXMenuButton) must return only
 /// after the menu's items are observable: the very first snapshot after the
 /// click contains the menu and every item, with no caller sleep or retry.
@@ -448,8 +454,7 @@ fn harness_swiftui_menu_press_publishes_items_background() {
                 !has_id(pre.tree_text(), "library-create-item"),
                 "menu items were published before the menu was opened"
             );
-            let index = element_index_by_id(pre.tree_text(), "library-create")
-                .expect("library-create element_index not found");
+            let index = line_index(button).expect("library-create element_index not found");
 
             let click = driver.call(
                 "click",
@@ -471,12 +476,13 @@ fn harness_swiftui_menu_press_publishes_items_background() {
             let open = snapshot(driver);
             let tree = open.tree_text();
             assert!(
-                tree.contains("AXMenu "),
+                tree.lines()
+                    .any(|line| line.split_whitespace().nth(2) == Some("AXMenu")),
                 "no AXMenu in the first snapshot after the press:\n{tree}"
             );
             for id in items {
                 assert!(
-                    has_id(tree, id),
+                    line_for_id(tree, id).is_some(),
                     "{id} missing from the first snapshot after the press:\n{tree}"
                 );
             }
@@ -496,7 +502,8 @@ fn harness_swiftui_menu_press_publishes_items_background() {
                 shot.text()
             );
 
-            let item_index = element_index_by_id(tree, "library-create-item")
+            let item_index = line_for_id(tree, "library-create-item")
+                .and_then(line_index)
                 .expect("New Item element_index not found");
             let select = driver.call(
                 "click",

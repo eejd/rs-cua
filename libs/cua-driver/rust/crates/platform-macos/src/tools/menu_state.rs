@@ -90,7 +90,8 @@ fn poll_publication(
         } else {
             positive_reads = 0;
         }
-        sleep(POLL_INTERVAL);
+        // Never sleep past the budget.
+        sleep(POLL_INTERVAL.min(budget.saturating_sub(elapsed())));
     }
 }
 
@@ -103,15 +104,29 @@ impl Drop for TimeoutReset {
     }
 }
 
-/// Children of `element`, with the query bounded by the smaller of
-/// `QUERY_TIMEOUT` and the time left. Empty once the deadline has passed.
-fn children_before(element: AXUIElementRef, deadline: Instant) -> Vec<AXUIElementRef> {
-    let now = Instant::now();
-    if now >= deadline {
-        return Vec::new();
+/// A per-query AX timeout: the smaller of `QUERY_TIMEOUT` and the time left,
+/// never below 1 ms (an AX timeout of 0 means "system default", which would
+/// lift the bound). `None` once the deadline has passed.
+fn query_timeout(deadline: Instant) -> Option<f32> {
+    let remaining = deadline.saturating_duration_since(Instant::now());
+    if remaining.is_zero() {
+        return None;
     }
-    let bound = QUERY_TIMEOUT.min(deadline - now);
-    unsafe { AXUIElementSetMessagingTimeout(element, bound.as_secs_f32()) };
+    Some(
+        QUERY_TIMEOUT
+            .min(remaining)
+            .max(Duration::from_millis(1))
+            .as_secs_f32(),
+    )
+}
+
+/// Children of `element`, with the query bounded by [`query_timeout`]. Empty
+/// once the deadline has passed.
+fn children_before(element: AXUIElementRef, deadline: Instant) -> Vec<AXUIElementRef> {
+    let Some(bound) = query_timeout(deadline) else {
+        return Vec::new();
+    };
+    unsafe { AXUIElementSetMessagingTimeout(element, bound) };
     let _reset = TimeoutReset(element);
     unsafe { copy_children(element) }
 }
@@ -122,13 +137,12 @@ fn children_before(element: AXUIElementRef, deadline: Instant) -> Vec<AXUIElemen
 fn menu_items_observable_before(owner: AXUIElementRef, deadline: Instant) -> bool {
     let mut open = false;
     for child in children_before(owner, deadline) {
-        if !open && Instant::now() < deadline {
-            let role = {
-                let bound = QUERY_TIMEOUT.min(deadline.saturating_duration_since(Instant::now()));
-                unsafe { AXUIElementSetMessagingTimeout(child, bound.as_secs_f32()) };
+        if !open {
+            let role = query_timeout(deadline).and_then(|bound| {
+                unsafe { AXUIElementSetMessagingTimeout(child, bound) };
                 let _reset = TimeoutReset(child);
                 unsafe { copy_string_attr(child, "AXRole") }
-            };
+            });
             if role.as_deref() == Some("AXMenu") {
                 for item in children_before(child, deadline) {
                     open = true;
@@ -196,8 +210,15 @@ mod tests {
     fn persistent_empty_ends_not_observed_within_budget() {
         let (outcome, finished, reads) = run(false, |_| false);
         assert_eq!(outcome, MenuPublication::NotObserved);
-        assert!(finished >= BUDGET && finished < BUDGET + POLL_INTERVAL);
+        assert_eq!(finished, BUDGET, "the wait must not sleep past the budget");
         assert!(reads > 1);
+    }
+
+    #[test]
+    fn late_positive_cannot_extend_the_budget() {
+        let (outcome, finished, _) = run(false, |t| t >= Duration::from_millis(960));
+        assert_eq!(outcome, MenuPublication::NotObserved);
+        assert_eq!(finished, BUDGET);
     }
 
     #[test]
