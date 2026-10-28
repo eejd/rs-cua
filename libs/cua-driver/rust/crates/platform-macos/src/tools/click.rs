@@ -370,7 +370,7 @@ fn def() -> &'static ToolDef {
                 "pointer_transport": {
                     "type": "string",
                     "enum": ["hid", "session"],
-                    "description": "scope \"desktop\" only. Default \"hid\": the global HID tap, which warps the real cursor and reaches only the console session. \"session\": the event tap of the calling login session, with no cursor warp, no global modifiers and no reach into any other session; works from a session that is not the console. Not combinable with modifier."
+                    "description": "scope \"desktop\" only. Default \"hid\": the global HID tap, which also warps the real cursor; macOS does not document where a HID-tap post from a session that is not the console is delivered, so it may reach the console user. \"session\": posts at the calling login session's event tap (where events enter that login session), with no cursor warp and no global modifier transitions; intended for a session that is not the console. Not combinable with modifier."
                 }
             },
             "additionalProperties": false
@@ -2273,6 +2273,36 @@ mod pointer_transport_tests {
         assert!(desktop_pointer_transport("session", true).is_err());
         for bad in ["", "Session", "annotated", "pid", "console"] {
             assert!(desktop_pointer_transport(bad, false).is_err(), "{bad:?}");
+        }
+    }
+
+    /// Every rejected shape returns before any OS call, so no live input is needed.
+    #[tokio::test]
+    async fn invoke_rejects_misplaced_or_malformed_pointer_transport_before_acting() {
+        use cua_driver_core::tool::Tool;
+        let tool = super::ClickTool::new(std::sync::Arc::new(super::ToolState::default()));
+        let cases = [
+            // present but not a string
+            serde_json::json!({"x": 1, "y": 2, "scope": "desktop", "pointer_transport": true}),
+            serde_json::json!({"x": 1, "y": 2, "scope": "desktop", "pointer_transport": 1}),
+            // unknown value
+            serde_json::json!({"x": 1, "y": 2, "scope": "desktop", "pointer_transport": "Session"}),
+            // session with modifiers
+            serde_json::json!({"x": 1, "y": 2, "scope": "desktop", "pointer_transport": "session", "modifier": ["cmd"]}),
+            // not the pid-less desktop path: window scope, a pid, or a window id
+            serde_json::json!({"x": 1, "y": 2, "pointer_transport": "session"}),
+            serde_json::json!({"x": 1, "y": 2, "scope": "window", "pointer_transport": "session"}),
+            serde_json::json!({"pid": 1, "x": 1, "y": 2, "scope": "desktop", "pointer_transport": "session"}),
+            serde_json::json!({"window_id": 9, "x": 1, "y": 2, "scope": "desktop", "pointer_transport": "hid"}),
+        ];
+        for case in cases {
+            let result = tool.invoke(case.clone()).await;
+            assert_eq!(result.is_error, Some(true), "{case}");
+            assert_eq!(
+                result.structured_content.as_ref().and_then(|v| v["code"].as_str()),
+                Some("invalid_arguments"),
+                "{case}"
+            );
         }
     }
 
