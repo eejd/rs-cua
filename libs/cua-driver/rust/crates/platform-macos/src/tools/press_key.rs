@@ -366,7 +366,11 @@ impl Tool for PressKeyTool {
 
         // The addressed window must be the app's confirmed key window before
         // any key (or focus click) goes out; otherwise refuse (window_not_key).
-        let _key_scope = match super::acquire_key_scope(pid, window_id, fg).await {
+        // Only a plain Escape may treat a focused sheet attached to the addressed window as
+        // the key window: Return, text and chords are never routed into a sheet.
+        let sheet_dismissal = modifiers.is_empty()
+            && matches!(key_raw.to_ascii_lowercase().as_str(), "escape" | "esc");
+        let _key_scope = match super::acquire_key_scope_for(pid, window_id, fg, sheet_dismissal).await {
             Ok(scope) => scope,
             Err(refusal) => return refusal,
         };

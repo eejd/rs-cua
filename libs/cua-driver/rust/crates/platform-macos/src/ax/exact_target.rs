@@ -158,6 +158,27 @@ unsafe fn owning_window_id(window: AXUIElementRef) -> Option<u32> {
     )
 }
 
+/// The CGWindowID a sheet-dismissal key posted to `pid` is scoped to: its
+/// `AXFocusedWindow`, except that a focused `AXSheet` maps to the window it is attached
+/// to (see [`owning_window_id`]). A sheet without a proven parent keeps its own id and
+/// never matches another window.
+pub fn focused_window_owner_id(pid: i32) -> Option<u32> {
+    // SAFETY: the application element is created and released here, the focused
+    // window is released before returning.
+    unsafe {
+        let app = AXUIElementCreateApplication(pid);
+        if app.is_null() {
+            return None;
+        }
+        let window = copy_element_attr(app, "AXFocusedWindow");
+        CFRelease(app as CFTypeRef);
+        let window = window?;
+        let id = owning_window_id(window);
+        CFRelease(window as CFTypeRef);
+        id
+    }
+}
+
 /// Pure sheet-to-parent resolution behind [`owning_window_id`].
 ///
 /// A sheet whose parent is not a window (or a sheet attached to another
