@@ -444,9 +444,27 @@ pub(crate) fn key_scope(
     pid: i32,
     window_id: Option<u32>,
 ) -> Result<Option<crate::input::skylight::WindowKeyScope>, String> {
+    key_scope_for(pid, window_id, false)
+}
+
+/// [`key_scope`]; `sheet_dismissal` (plain Escape only) accepts a focused sheet attached
+/// to the addressed window as the key window keys reach.
+pub(crate) fn key_scope_for(
+    pid: i32,
+    window_id: Option<u32>,
+    sheet_dismissal: bool,
+) -> Result<Option<crate::input::skylight::WindowKeyScope>, String> {
     match window_id {
         Some(wid) if crate::input::skylight::is_focus_without_raise_available() => {
-            crate::input::skylight::enter_exact_window_key(pid as libc::pid_t, wid).map(Some)
+            if sheet_dismissal {
+                crate::input::skylight::enter_exact_window_key_for_sheet_dismissal(
+                    pid as libc::pid_t,
+                    wid,
+                )
+            } else {
+                crate::input::skylight::enter_exact_window_key(pid as libc::pid_t, wid)
+            }
+            .map(Some)
         }
         _ => Ok(None),
     }
@@ -460,10 +478,20 @@ pub(crate) async fn acquire_key_scope(
     window_id: Option<u32>,
     foreground: bool,
 ) -> Result<Option<crate::input::skylight::WindowKeyScope>, cua_driver_core::protocol::ToolResult> {
+    acquire_key_scope_for(pid, window_id, foreground, false).await
+}
+
+/// [`acquire_key_scope`] with the sheet-dismissal allowance of [`key_scope_for`].
+pub(crate) async fn acquire_key_scope_for(
+    pid: i32,
+    window_id: Option<u32>,
+    foreground: bool,
+    sheet_dismissal: bool,
+) -> Result<Option<crate::input::skylight::WindowKeyScope>, cua_driver_core::protocol::ToolResult> {
     let Some(wid) = window_id.filter(|_| !foreground) else {
         return Ok(None);
     };
-    match tokio::task::spawn_blocking(move || key_scope(pid, Some(wid))).await {
+    match tokio::task::spawn_blocking(move || key_scope_for(pid, Some(wid), sheet_dismissal)).await {
         Ok(Ok(scope)) => Ok(scope),
         Ok(Err(_)) if crate::input::skylight::windowserver_connection_invalid() => {
             Err(windowserver_connection_refusal(pid, Some(wid)))

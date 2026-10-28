@@ -223,12 +223,17 @@ fn set_app_focused_window(pid: pid_t, wid: u32) -> bool {
     }
 }
 
-/// The app's focus as Accessibility reports it. A focused sheet counts as its
-/// attached window: the sheet is the key window keys reach, modal to that window,
-/// so the window the sheet belongs to is exactly where keys are routed.
-fn key_focus_of_pid(pid: pid_t) -> KeyFocus {
+/// The app's focus as Accessibility reports it. With `sheet_aware` a focused sheet
+/// counts as the window it is attached to: the sheet is the key window keys reach and
+/// is modal to that window. Only a sheet-dismissal key may ask for that; every other
+/// key keeps the raw focused window, so it can never be routed into a sheet.
+fn key_focus_of_pid(pid: pid_t, sheet_aware: bool) -> KeyFocus {
     KeyFocus {
-        window: crate::ax::exact_target::focused_window_owner_id(pid),
+        window: if sheet_aware {
+            crate::ax::exact_target::focused_window_owner_id(pid)
+        } else {
+            crate::ax::bindings::focused_window_id_of_pid(pid)
+        },
         element_window: crate::ax::bindings::focused_element_window_id_of_pid(pid),
     }
 }
@@ -283,10 +288,10 @@ pub fn post_window_key_records(pid: pid_t, current: Option<u32>, target: u32) ->
 /// The make-key records are handled on the app's main thread, so the change
 /// trails the post; a never-active LibreOffice shows it last, when a focused
 /// element appears. The caller re-reads and decides.
-fn await_key_focus(pid: pid_t, target: u32, budget: std::time::Duration) {
+fn await_key_focus(pid: pid_t, target: u32, budget: std::time::Duration, sheet_aware: bool) {
     std::thread::sleep(KEY_RECORD_SETTLE);
     let deadline = std::time::Instant::now() + budget;
-    while !key_focus_of_pid(pid).settled_on(target) && std::time::Instant::now() < deadline {
+    while !key_focus_of_pid(pid, sheet_aware).settled_on(target) && std::time::Instant::now() < deadline {
         std::thread::sleep(std::time::Duration::from_millis(40));
     }
 }
@@ -295,24 +300,40 @@ fn await_key_focus(pid: pid_t, target: u32, budget: std::time::Duration) {
 /// pointer), confirmed by re-reading the app's focus, and return a guard that
 /// hands key back. `Err` when it cannot be confirmed.
 pub fn enter_exact_window_key(pid: pid_t, target_wid: u32) -> Result<WindowKeyScope, String> {
-    // The window key goes back to is the raw AX-focused window (a sheet stays a sheet);
-    // only the routing check below maps a focused sheet to the window it is attached to.
+    enter_exact_window_key_scoped(pid, target_wid, false)
+}
+
+/// [`enter_exact_window_key`] for a sheet-dismissal key (plain Escape): a focused sheet
+/// attached to `target_wid` is accepted as the key window keys reach for that target.
+pub fn enter_exact_window_key_for_sheet_dismissal(
+    pid: pid_t,
+    target_wid: u32,
+) -> Result<WindowKeyScope, String> {
+    enter_exact_window_key_scoped(pid, target_wid, true)
+}
+
+fn enter_exact_window_key_scoped(
+    pid: pid_t,
+    target_wid: u32,
+    sheet_aware: bool,
+) -> Result<WindowKeyScope, String> {
+    // The window key goes back to is the raw AX-focused window (a sheet stays a sheet).
     let previous = crate::ax::bindings::focused_window_id_of_pid(pid);
     let order_before = app_window_order(pid);
     let primed = prime_exact_window_key(
         target_wid,
-        || key_focus_of_pid(pid),
+        || key_focus_of_pid(pid, sheet_aware),
         || {
             let ok = post_window_key_records(pid, previous, target_wid);
             if ok {
-                await_key_focus(pid, target_wid, std::time::Duration::from_millis(400));
+                await_key_focus(pid, target_wid, std::time::Duration::from_millis(400), sheet_aware);
             }
             ok
         },
         || {
             let ok = set_app_focused_window(pid, target_wid);
             if ok {
-                await_key_focus(pid, target_wid, std::time::Duration::from_millis(200));
+                await_key_focus(pid, target_wid, std::time::Duration::from_millis(200), sheet_aware);
             }
             ok
         },
