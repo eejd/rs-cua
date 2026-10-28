@@ -64,6 +64,9 @@ pub enum ActionTransport {
     MacosAxWindowFrame,
     MacosCgEventPid,
     MacosCgEventHid,
+    /// A CGEvent posted at the login-session event tap: reaches only the calling
+    /// process's own login session, never the console's hardware input.
+    MacosCgEventSession,
     /// An Apple Event to the target app's scripting interface (Finder
     /// rename, a document save), which never activates the app.
     MacosAppleEvent,
@@ -109,6 +112,7 @@ impl ActionTransport {
         Self::MacosAxWindowFrame,
         Self::MacosCgEventPid,
         Self::MacosCgEventHid,
+        Self::MacosCgEventSession,
         Self::MacosAppleEvent,
         Self::WindowsUiaInvoke,
         Self::WindowsUiaToggle,
@@ -158,6 +162,7 @@ impl ActionTransport {
             | Self::LinuxAtSpiAction
             | Self::LinuxAtSpiValue => ActionRoute::Accessibility,
             Self::MacosCgEventPid
+            | Self::MacosCgEventSession
             | Self::WindowsPostMessage
             | Self::LinuxPty
             | Self::LinuxXSendEvent
@@ -799,6 +804,7 @@ fn transport_from_legacy(
             ActionTransport::LinuxCuaCompositorInject
         }
         "hid" | "cgevent_hid" | "cgevent_fg" => ActionTransport::MacosCgEventHid,
+        "cgevent_session" => ActionTransport::MacosCgEventSession,
         "cgevent" => {
             if args
                 .get("delivery_mode")
@@ -1119,6 +1125,7 @@ fn transport_name(transport: ActionTransport) -> &'static str {
         ActionTransport::MacosAxWindowFrame => "macos_ax_window_frame",
         ActionTransport::MacosCgEventPid => "macos_cg_event_pid",
         ActionTransport::MacosCgEventHid => "macos_cg_event_hid",
+        ActionTransport::MacosCgEventSession => "macos_cg_event_session",
         ActionTransport::MacosAppleEvent => "macos_apple_event",
         ActionTransport::WindowsUiaInvoke => "windows_uia_invoke",
         ActionTransport::WindowsUiaToggle => "windows_uia_toggle",
@@ -2080,6 +2087,7 @@ mod tests {
             "wayland_cua_compositor",
             "hid",
             "cgevent_hid",
+            "cgevent_session",
             "cgevent",
             "cgevent_fg",
             "dom_event",
