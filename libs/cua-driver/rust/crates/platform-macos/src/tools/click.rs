@@ -366,6 +366,11 @@ fn def() -> &'static ToolDef {
                     "type": "string",
                     "enum": ["window", "desktop"],
                     "description": "Default \"window\". \"desktop\": x,y with no pid/window_id are true screen pixels from get_desktop_state."
+                },
+                "pointer_transport": {
+                    "type": "string",
+                    "enum": ["hid", "session"],
+                    "description": "scope \"desktop\" only. Default \"hid\": the global HID tap, which warps the real cursor and reaches only the console session. \"session\": the event tap of the calling login session, with no cursor warp, no global modifiers and no reach into any other session; works from a session that is not the console. Not combinable with modifier."
                 }
             },
             "additionalProperties": false
@@ -476,7 +481,26 @@ impl Tool for ClickTool {
 
             let btn = button.clone();
             let desktop_modifiers: Vec<String> = args.str_array("modifier");
+            let session_transport = match args.str_or("pointer_transport", "hid").as_str() {
+                "hid" => false,
+                "session" => true,
+                other => {
+                    return ToolResult::error(format!(
+                        "click.pointer_transport must be \"hid\" or \"session\", got \"{other}\"."
+                    ))
+                    .with_structured(serde_json::json!({ "code": "invalid_arguments" }));
+                }
+            };
+            if session_transport && !desktop_modifiers.is_empty() {
+                return ToolResult::error(
+                    "click.pointer_transport \"session\" does not support modifier keys.",
+                )
+                .with_structured(serde_json::json!({ "code": "invalid_arguments" }));
+            }
             let result = tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
+                if session_transport {
+                    return crate::input::mouse::click_at_xy_session(sx, sy, count, &btn);
+                }
                 // Desktop scope is explicitly foreground and vision-driven: post
                 // at the global HID tap so WindowServer delivers to the window
                 // actually visible at this point. PID-posting here would silently
@@ -503,7 +527,11 @@ impl Tool for ClickTool {
                      ({sx_shot:.0},{sy_shot:.0}) → screen-point ({sx:.0},{sy:.0}) \
                      (desktop scope; not driver-verified)."
                 ))
-                .with_structured(serde_json::json!({ "path": "cgevent_hid", "verified": false, "effect": "unverifiable" })),
+                .with_structured(serde_json::json!({
+                    "path": if session_transport { "cgevent_session" } else { "cgevent_hid" },
+                    "verified": false,
+                    "effect": "unverifiable"
+                })),
                 Ok(Err(e)) => ToolResult::error(format!("desktop-scope click failed: {e}")),
                 Err(e) => ToolResult::error(format!("task error: {e}")),
             };

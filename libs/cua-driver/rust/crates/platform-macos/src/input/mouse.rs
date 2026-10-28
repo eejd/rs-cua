@@ -141,6 +141,72 @@ pub fn click_at_xy_desktop(x: f64, y: f64, count: usize, button: &str) -> anyhow
     click_at_xy_desktop_inner(x, y, count, button, &[], false)
 }
 
+/// Monotonic per-process mouse event number for session-tap clicks. macOS 27 hit-tests
+/// an injected click only when its `kCGMouseEventNumber` is unique per click and
+/// identical on the down and the up of one click.
+static SESSION_MOUSE_EVENT_NUMBER: std::sync::atomic::AtomicI64 =
+    std::sync::atomic::AtomicI64::new(0x5E55_1000);
+
+/// Screen-absolute click delivered at `CGEventTapLocation::Session`: the point where
+/// events enter THIS process's login session. It never reaches another session, so it
+/// works from a session that is not the console (a fast-user-switched or Screen
+/// Sharing session) without touching the console user's pointer, windows or focus.
+///
+/// Unlike [`click_at_xy_desktop`] it has none of the global side effects of the HID
+/// transport: no `CGDisplay` cursor warp, no hardware cursor re-association, no
+/// physical modifier transitions, and a `Private` event source so the HID system
+/// state (the user's physical keyboard/modifiers) is neither read nor changed. The
+/// events carry the point themselves. Modifier clicks are not supported here.
+pub fn click_at_xy_session(x: f64, y: f64, count: usize, button: &str) -> anyhow::Result<()> {
+    use core_graphics::event::{CGEventTapLocation, EventField};
+    let source = CGEventSource::new(CGEventSourceStateID::Private)
+        .map_err(|_| anyhow::anyhow!("CGEventSource::new failed"))?;
+    let point = CGPoint::new(x, y);
+    let (down_ty, up_ty, btn) = match button {
+        "right" => (
+            CGEventType::RightMouseDown,
+            CGEventType::RightMouseUp,
+            CGMouseButton::Right,
+        ),
+        "middle" => (
+            CGEventType::OtherMouseDown,
+            CGEventType::OtherMouseUp,
+            CGMouseButton::Center,
+        ),
+        _ => (
+            CGEventType::LeftMouseDown,
+            CGEventType::LeftMouseUp,
+            CGMouseButton::Left,
+        ),
+    };
+    let moved = CGEvent::new_mouse_event(
+        source.clone(),
+        CGEventType::MouseMoved,
+        point,
+        CGMouseButton::Left,
+    )
+    .map_err(|_| anyhow::anyhow!("CGEvent::new_mouse_event(move) failed"))?;
+    moved.set_flags(CGEventFlags::CGEventFlagNull);
+    moved.post(CGEventTapLocation::Session);
+    std::thread::sleep(std::time::Duration::from_millis(12));
+    for pair_index in 0..count.max(1) {
+        let number = SESSION_MOUSE_EVENT_NUMBER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        for ty in [down_ty, up_ty] {
+            let event = CGEvent::new_mouse_event(source.clone(), ty, point, btn)
+                .map_err(|_| anyhow::anyhow!("CGEvent::new_mouse_event(click) failed"))?;
+            event.set_flags(CGEventFlags::CGEventFlagNull);
+            event.set_integer_value_field(EventField::MOUSE_EVENT_CLICK_STATE, (pair_index + 1) as i64);
+            event.set_integer_value_field(EventField::MOUSE_EVENT_NUMBER, number);
+            event.post(CGEventTapLocation::Session);
+            std::thread::sleep(std::time::Duration::from_millis(28));
+        }
+        if count > 1 {
+            std::thread::sleep(std::time::Duration::from_millis(80));
+        }
+    }
+    Ok(())
+}
+
 /// Global HID click with physical modifier transitions. The caller must guard
 /// the exact foreground window because this transport has no pid addressing.
 pub fn click_at_xy_desktop_with_modifiers(
