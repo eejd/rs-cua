@@ -158,6 +158,29 @@ unsafe fn owning_window_id(window: AXUIElementRef) -> Option<u32> {
     )
 }
 
+/// The CGWindowID key events posted to `pid` are scoped to: its `AXFocusedWindow`,
+/// except that a focused `AXSheet` maps to the window it is attached to (see
+/// [`owning_window_id`]). A sheet is the key window of an app whose attached window
+/// is the exact target, and it is modal to that window, so it is not a sibling
+/// destination. A sheet without a proven parent keeps its own id and never matches
+/// another window.
+pub fn focused_window_owner_id(pid: i32) -> Option<u32> {
+    // SAFETY: the application element is created and released here, the focused
+    // window is released before returning.
+    unsafe {
+        let app = AXUIElementCreateApplication(pid);
+        if app.is_null() {
+            return None;
+        }
+        let window = copy_element_attr(app, "AXFocusedWindow");
+        CFRelease(app as CFTypeRef);
+        let window = window?;
+        let id = owning_window_id(window);
+        CFRelease(window as CFTypeRef);
+        id
+    }
+}
+
 /// Pure sheet-to-parent resolution behind [`owning_window_id`].
 ///
 /// A sheet whose parent is not a window (or a sheet attached to another
@@ -323,8 +346,11 @@ pub fn gather_background_facts(
                 let in_menu_bar = window.is_none() && element_in_app_menu_bar(app, element);
                 element_ancestry(window, in_menu_bar, window_id)
             });
+            // A focused sheet is key for the window it is attached to: keys posted to
+            // the app reach the sheet, which is modal to that window and so never a
+            // sibling destination. A sheet without a proven parent keeps its own id.
             let focused_window_id = copy_element_attr(app, "AXFocusedWindow").and_then(|window| {
-                let window_id = ax_get_window_id(window);
+                let window_id = owning_window_id(window);
                 CFRelease(window as CFTypeRef);
                 window_id
             });

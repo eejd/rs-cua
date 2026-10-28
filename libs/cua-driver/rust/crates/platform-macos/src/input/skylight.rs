@@ -223,10 +223,12 @@ fn set_app_focused_window(pid: pid_t, wid: u32) -> bool {
     }
 }
 
-/// The app's focus as Accessibility reports it.
+/// The app's focus as Accessibility reports it. A focused sheet counts as its
+/// attached window: the sheet is the key window keys reach, modal to that window,
+/// so the window the sheet belongs to is exactly where keys are routed.
 fn key_focus_of_pid(pid: pid_t) -> KeyFocus {
     KeyFocus {
-        window: crate::ax::bindings::focused_window_id_of_pid(pid),
+        window: crate::ax::exact_target::focused_window_owner_id(pid),
         element_window: crate::ax::bindings::focused_element_window_id_of_pid(pid),
     }
 }
@@ -293,8 +295,9 @@ fn await_key_focus(pid: pid_t, target: u32, budget: std::time::Duration) {
 /// pointer), confirmed by re-reading the app's focus, and return a guard that
 /// hands key back. `Err` when it cannot be confirmed.
 pub fn enter_exact_window_key(pid: pid_t, target_wid: u32) -> Result<WindowKeyScope, String> {
-    let before = key_focus_of_pid(pid);
-    let previous = before.window;
+    // The window key goes back to is the raw AX-focused window (a sheet stays a sheet);
+    // only the routing check below maps a focused sheet to the window it is attached to.
+    let previous = crate::ax::bindings::focused_window_id_of_pid(pid);
     let order_before = app_window_order(pid);
     let primed = prime_exact_window_key(
         target_wid,
