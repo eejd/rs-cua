@@ -57,6 +57,7 @@ Click a target pid. Prefer `element_token` (from get_window_state): it identifie
 | <span id="click--macos--from_zoom"></span>`from_zoom` | `boolean` |  | x and y are in the last zoom image for this pid. |
 | <span id="click--macos--modifier"></span>`modifier` | `string[]` |  | Modifier keys: cmd, shift, option/alt, ctrl. |
 | <span id="click--macos--pid"></span>`pid` | `integer` |  | Target process ID. Optional with element_token (it carries the pid). |
+| <span id="click--macos--pointer_transport"></span>`pointer_transport` | `"hid" \| "session"` |  | scope "desktop" only. Default "hid": the global HID tap, which also warps the real cursor; macOS does not document where a HID-tap post from a session that is not the console is delivered, so it may reach the console user. "session": posts at the calling login session's event tap (where events enter that login session), with no cursor warp and no global modifier transitions; intended for a session that is not the console. Not combinable with modifier. |
 | <span id="click--macos--scope"></span>`scope` | `"window" \| "desktop"` |  | Default "window". "desktop": x,y with no pid/window_id are true screen pixels from get_desktop_state. |
 | <span id="click--macos--session"></span>`session` | `string` |  | For multi-call work, prefer a short public session label and repeat it on every call that accepts it. |
 | <span id="click--macos--window_id"></span>`window_id` | `integer` |  | Target window ID. Omit with element_token. |

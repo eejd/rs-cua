@@ -550,6 +550,14 @@
       "description": "Target process ID. Optional with element_token (it carries the pid).",
       "type": "integer"
      },
+     "pointer_transport": {
+      "description": "scope \"desktop\" only. Default \"hid\": the global HID tap, which also warps the real cursor; macOS does not document where a HID-tap post from a session that is not the console is delivered, so it may reach the console user. \"session\": posts at the calling login session's event tap (where events enter that login session), with no cursor warp and no global modifier transitions; intended for a session that is not the console. Not combinable with modifier.",
+      "enum": [
+       "hid",
+       "session"
+      ],
+      "type": "string"
+     },
      "scope": {
       "description": "Default \"window\". \"desktop\": x,y with no pid/window_id are true screen pixels from get_desktop_state.",
       "enum": [

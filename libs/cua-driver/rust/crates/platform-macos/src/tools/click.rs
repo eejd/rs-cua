@@ -366,6 +366,11 @@ fn def() -> &'static ToolDef {
                     "type": "string",
                     "enum": ["window", "desktop"],
                     "description": "Default \"window\". \"desktop\": x,y with no pid/window_id are true screen pixels from get_desktop_state."
+                },
+                "pointer_transport": {
+                    "type": "string",
+                    "enum": ["hid", "session"],
+                    "description": "scope \"desktop\" only. Default \"hid\": the global HID tap, which also warps the real cursor; macOS does not document where a HID-tap post from a session that is not the console is delivered, so it may reach the console user. \"session\": posts at the calling login session's event tap (where events enter that login session), with no cursor warp and no global modifier transitions; intended for a session that is not the console. Not combinable with modifier."
                 }
             },
             "additionalProperties": false
@@ -375,6 +380,22 @@ fn def() -> &'static ToolDef {
         idempotent:  false,
         open_world:  true,
     })
+}
+
+/// Whether a desktop-scope click uses the login-session event tap (`true`) or the global
+/// HID tap (`false`). The request selects it explicitly; nothing is inferred from the
+/// console state. A session-tap click carries no modifier transitions.
+fn desktop_pointer_transport(value: &str, has_modifiers: bool) -> Result<bool, String> {
+    match value {
+        "hid" => Ok(false),
+        "session" if has_modifiers => {
+            Err("click.pointer_transport \"session\" does not support modifier keys.".to_owned())
+        }
+        "session" => Ok(true),
+        other => Err(format!(
+            "click.pointer_transport must be \"hid\" or \"session\", got \"{other}\"."
+        )),
+    }
 }
 
 #[async_trait]
@@ -397,6 +418,43 @@ impl Tool for ClickTool {
         let has_window_id = args.get("window_id").map(|v| !v.is_null()).unwrap_or(false);
         let has_xy = args.get("x").map(|v| v.is_number()).unwrap_or(false)
             && args.get("y").map(|v| v.is_number()).unwrap_or(false);
+        // `pointer_transport` is validated before anything runs: a present value must be
+        // a known string, and it is accepted only on the screen-absolute desktop path.
+        let session_transport = match args.get("pointer_transport").filter(|v| !v.is_null()) {
+            None => false,
+            Some(value) => {
+                let desktop_path = has_xy
+                    && !has_pid
+                    && !has_window_id
+                    && args.str_or("scope", "window") == "desktop";
+                let has_modifiers = !args.str_array("modifier").is_empty();
+                match value.as_str() {
+                    Some(text) if desktop_path => {
+                        match desktop_pointer_transport(text, has_modifiers) {
+                            Ok(session) => session,
+                            Err(message) => {
+                                return ToolResult::error(message).with_structured(
+                                    serde_json::json!({ "code": "invalid_arguments" }),
+                                );
+                            }
+                        }
+                    }
+                    Some(_) => {
+                        return ToolResult::error(
+                            "click.pointer_transport applies only to scope \"desktop\" clicks at \
+                             screen coordinates (x, y with no pid or window_id).",
+                        )
+                        .with_structured(serde_json::json!({ "code": "invalid_arguments" }));
+                    }
+                    None => {
+                        return ToolResult::error(
+                            "click.pointer_transport must be the string \"hid\" or \"session\".",
+                        )
+                        .with_structured(serde_json::json!({ "code": "invalid_arguments" }));
+                    }
+                }
+            }
+        };
         let capture_id = args.opt_str("capture_id");
         if capture_id.is_some() && !has_xy {
             return ToolResult::error("click.capture_id requires pixel coordinates x and y.")
@@ -459,24 +517,33 @@ impl Tool for ClickTool {
                 return ToolResult::error("click.count must be at least 1.")
                     .with_structured(serde_json::json!({ "code": "invalid_arguments" }));
             }
-            if let Some(refusal) =
-                super::desktop_pointer_guard::check("click", &args, vec![(sx, sy)]).await
-            {
-                return refusal;
+            // The HID transport drives the user's real pointer, so it is guarded against
+            // background work and shown through the agent cursor. A session-tap click never
+            // touches the hardware pointer or another session's windows: the guard (which
+            // reads the console's frontmost app) and the overlay glide do not apply.
+            if !session_transport {
+                if let Some(refusal) =
+                    super::desktop_pointer_guard::check("click", &args, vec![(sx, sy)]).await
+                {
+                    return refusal;
+                }
+                // Glide the session's agent cursor to the screen point for visibility.
+                let cursor_key = super::cursor_tools::resolve_cursor_key(&args);
+                crate::cursor::overlay::animate_cursor_to(cursor_key.clone(), sx, sy).await;
+                self.state
+                    .cursor_registry
+                    .update_position(&cursor_key, sx, sy);
+                // Press edge for the agent-cursor overlay (renders a click pulse on
+                // viewers via the cursor hook).
+                self.state.cursor_registry.note_press(&cursor_key, sx, sy);
             }
-            // Glide the session's agent cursor to the screen point for visibility.
-            let cursor_key = super::cursor_tools::resolve_cursor_key(&args);
-            crate::cursor::overlay::animate_cursor_to(cursor_key.clone(), sx, sy).await;
-            self.state
-                .cursor_registry
-                .update_position(&cursor_key, sx, sy);
-            // Press edge for the agent-cursor overlay (renders a click pulse on
-            // viewers via the cursor hook).
-            self.state.cursor_registry.note_press(&cursor_key, sx, sy);
 
             let btn = button.clone();
             let desktop_modifiers: Vec<String> = args.str_array("modifier");
             let result = tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
+                if session_transport {
+                    return crate::input::mouse::click_at_xy_session(sx, sy, count, &btn);
+                }
                 // Desktop scope is explicitly foreground and vision-driven: post
                 // at the global HID tap so WindowServer delivers to the window
                 // actually visible at this point. PID-posting here would silently
@@ -503,7 +570,11 @@ impl Tool for ClickTool {
                      ({sx_shot:.0},{sy_shot:.0}) → screen-point ({sx:.0},{sy:.0}) \
                      (desktop scope; not driver-verified)."
                 ))
-                .with_structured(serde_json::json!({ "path": "cgevent_hid", "verified": false, "effect": "unverifiable" })),
+                .with_structured(serde_json::json!({
+                    "path": if session_transport { "cgevent_session" } else { "cgevent_hid" },
+                    "verified": false,
+                    "effect": "unverifiable"
+                })),
                 Ok(Err(e)) => ToolResult::error(format!("desktop-scope click failed: {e}")),
                 Err(e) => ToolResult::error(format!("task error: {e}")),
             };
@@ -2183,5 +2254,62 @@ mod tests {
             None,
             "strict-suppression paths retain their existing ownership"
         );
+    }
+}
+
+#[cfg(test)]
+mod pointer_transport_tests {
+    use super::desktop_pointer_transport;
+
+    #[test]
+    fn hid_is_the_default_selection_and_session_must_be_asked_for() {
+        assert_eq!(desktop_pointer_transport("hid", false), Ok(false));
+        assert_eq!(desktop_pointer_transport("hid", true), Ok(false));
+        assert_eq!(desktop_pointer_transport("session", false), Ok(true));
+    }
+
+    #[test]
+    fn session_refuses_modifiers_and_unknown_values_fail_closed() {
+        assert!(desktop_pointer_transport("session", true).is_err());
+        for bad in ["", "Session", "annotated", "pid", "console"] {
+            assert!(desktop_pointer_transport(bad, false).is_err(), "{bad:?}");
+        }
+    }
+
+    /// Every rejected shape returns before any OS call, so no live input is needed.
+    #[tokio::test]
+    async fn invoke_rejects_misplaced_or_malformed_pointer_transport_before_acting() {
+        use cua_driver_core::tool::Tool;
+        let tool = super::ClickTool::new(std::sync::Arc::new(super::ToolState::default()));
+        let cases = [
+            // present but not a string
+            serde_json::json!({"x": 1, "y": 2, "scope": "desktop", "pointer_transport": true}),
+            serde_json::json!({"x": 1, "y": 2, "scope": "desktop", "pointer_transport": 1}),
+            // unknown value
+            serde_json::json!({"x": 1, "y": 2, "scope": "desktop", "pointer_transport": "Session"}),
+            // session with modifiers
+            serde_json::json!({"x": 1, "y": 2, "scope": "desktop", "pointer_transport": "session", "modifier": ["cmd"]}),
+            // not the pid-less desktop path: window scope, a pid, or a window id
+            serde_json::json!({"x": 1, "y": 2, "pointer_transport": "session"}),
+            serde_json::json!({"x": 1, "y": 2, "scope": "window", "pointer_transport": "session"}),
+            serde_json::json!({"pid": 1, "x": 1, "y": 2, "scope": "desktop", "pointer_transport": "session"}),
+            serde_json::json!({"window_id": 9, "x": 1, "y": 2, "scope": "desktop", "pointer_transport": "hid"}),
+        ];
+        for case in cases {
+            let result = tool.invoke(case.clone()).await;
+            assert_eq!(result.is_error, Some(true), "{case}");
+            assert_eq!(
+                result.structured_content.as_ref().and_then(|v| v["code"].as_str()),
+                Some("invalid_arguments"),
+                "{case}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_advertised_schema_lists_exactly_the_two_transports() {
+        let schema = super::def().input_schema.clone();
+        let transport = &schema["properties"]["pointer_transport"];
+        assert_eq!(transport["enum"], serde_json::json!(["hid", "session"]));
     }
 }

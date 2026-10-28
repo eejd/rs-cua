@@ -141,6 +141,146 @@ pub fn click_at_xy_desktop(x: f64, y: f64, count: usize, button: &str) -> anyhow
     click_at_xy_desktop_inner(x, y, count, button, &[], false)
 }
 
+/// Monotonic per-process mouse event number for session-tap clicks. macOS 27 hit-tests
+/// an injected click only when its `kCGMouseEventNumber` is unique per click and
+/// identical on the down and the up of one click.
+static SESSION_MOUSE_EVENT_NUMBER: std::sync::atomic::AtomicI64 =
+    std::sync::atomic::AtomicI64::new(0x5E55_1000);
+
+/// Screen-absolute click delivered at `CGEventTapLocation::Session`: the point where
+/// events enter THIS process's login session. It never reaches another session, so it
+/// works from a session that is not the console (a fast-user-switched or Screen
+/// Sharing session) without touching the console user's pointer, windows or focus.
+///
+/// Unlike [`click_at_xy_desktop`] it has none of the global side effects of the HID
+/// transport: no `CGDisplay` cursor warp, no hardware cursor re-association, no
+/// physical modifier transitions, and a `Private` event source so the HID system
+/// state (the user's physical keyboard/modifiers) is neither read nor changed. The
+/// events carry the point themselves. Modifier clicks are not supported here.
+pub fn click_at_xy_session(x: f64, y: f64, count: usize, button: &str) -> anyhow::Result<()> {
+    use core_graphics::event::{CGEventTapLocation, EventField};
+    let source = CGEventSource::new(CGEventSourceStateID::Private)
+        .map_err(|_| anyhow::anyhow!("CGEventSource::new failed"))?;
+    let point = CGPoint::new(x, y);
+    let (down_ty, up_ty, btn) = match button {
+        "right" => (
+            CGEventType::RightMouseDown,
+            CGEventType::RightMouseUp,
+            CGMouseButton::Right,
+        ),
+        "middle" => (
+            CGEventType::OtherMouseDown,
+            CGEventType::OtherMouseUp,
+            CGMouseButton::Center,
+        ),
+        _ => (
+            CGEventType::LeftMouseDown,
+            CGEventType::LeftMouseUp,
+            CGMouseButton::Left,
+        ),
+    };
+    let moved = CGEvent::new_mouse_event(
+        source.clone(),
+        CGEventType::MouseMoved,
+        point,
+        CGMouseButton::Left,
+    )
+    .map_err(|_| anyhow::anyhow!("CGEvent::new_mouse_event(move) failed"))?;
+    moved.set_flags(CGEventFlags::CGEventFlagNull);
+    moved.post(CGEventTapLocation::Session);
+    std::thread::sleep(std::time::Duration::from_millis(12));
+    let first_number = SESSION_MOUSE_EVENT_NUMBER
+        .fetch_add(count.max(1) as i64, std::sync::atomic::Ordering::Relaxed);
+    let plan = plan_session_click(count, first_number);
+    // Build every event before posting any, so a construction failure can never leave the
+    // button logically down.
+    let mut events = Vec::with_capacity(plan.len());
+    for step in &plan {
+        let ty = if step.is_down { down_ty } else { up_ty };
+        let event = CGEvent::new_mouse_event(source.clone(), ty, point, btn)
+            .map_err(|_| anyhow::anyhow!("CGEvent::new_mouse_event(click) failed"))?;
+        event.set_flags(CGEventFlags::CGEventFlagNull);
+        event.set_integer_value_field(EventField::MOUSE_EVENT_CLICK_STATE, step.click_state);
+        event.set_integer_value_field(EventField::MOUSE_EVENT_NUMBER, step.event_number);
+        events.push(event);
+    }
+    for (index, (step, event)) in plan.iter().zip(&events).enumerate() {
+        event.post(CGEventTapLocation::Session);
+        std::thread::sleep(std::time::Duration::from_millis(28));
+        if count > 1 && !step.is_down && index + 1 < plan.len() {
+            std::thread::sleep(std::time::Duration::from_millis(80));
+        }
+    }
+    Ok(())
+}
+
+/// One event of a planned session-tap click.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct SessionClickStep {
+    pub is_down: bool,
+    /// `kCGMouseEventClickState`: 1 for the first click of a multi-click, then 2, ...
+    pub click_state: i64,
+    /// `kCGMouseEventNumber`: identical on the down and up of one click, distinct
+    /// across clicks (macOS 27 hit-tests an injected click by it).
+    pub event_number: i64,
+}
+
+/// The down/up sequence of `count` clicks (at least one), numbered from `first_number`.
+pub(crate) fn plan_session_click(count: usize, first_number: i64) -> Vec<SessionClickStep> {
+    (0..count.max(1))
+        .flat_map(|pair| {
+            let number = first_number + pair as i64;
+            [true, false].map(|is_down| SessionClickStep {
+                is_down,
+                click_state: pair as i64 + 1,
+                event_number: number,
+            })
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod session_click_tests {
+    use super::{plan_session_click, SessionClickStep};
+
+    #[test]
+    fn one_click_is_a_down_and_an_up_sharing_one_event_number() {
+        let plan = plan_session_click(1, 100);
+        assert_eq!(
+            plan,
+            vec![
+                SessionClickStep {
+                    is_down: true,
+                    click_state: 1,
+                    event_number: 100
+                },
+                SessionClickStep {
+                    is_down: false,
+                    click_state: 1,
+                    event_number: 100
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn each_click_of_a_multi_click_has_its_own_number_and_rising_click_state() {
+        let plan = plan_session_click(3, 7);
+        let numbers: Vec<_> = plan.iter().map(|step| step.event_number).collect();
+        assert_eq!(numbers, vec![7, 7, 8, 8, 9, 9]);
+        let states: Vec<_> = plan.iter().map(|step| step.click_state).collect();
+        assert_eq!(states, vec![1, 1, 2, 2, 3, 3]);
+        assert!(plan
+            .chunks(2)
+            .all(|pair| pair[0].is_down && !pair[1].is_down));
+    }
+
+    #[test]
+    fn a_zero_count_still_clicks_once() {
+        assert_eq!(plan_session_click(0, 1).len(), 2);
+    }
+}
+
 /// Global HID click with physical modifier transitions. The caller must guard
 /// the exact foreground window because this transport has no pid addressing.
 pub fn click_at_xy_desktop_with_modifiers(
