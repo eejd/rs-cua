@@ -300,154 +300,150 @@ actor VNCClient {
         return (frameBufferWidth, frameBufferHeight)
     }
 
+    /// Pixel layout for `CGImage` from the server's PixelFormat shifts.
+    ///
+    /// A little-endian ARGB/XRGB server (red 16, green 8, blue 0) sends bytes [B][G][R][X]. That is
+    /// `noneSkipFirst | byteOrder32Little`; `noneSkipLast | byteOrder32Little` is not a supported `CGImage`
+    /// combination and made every capture fail with "Failed to create CGImage".
+    static func bitmapInfo(bigEndian: Bool, redShift: UInt8, greenShift: UInt8, blueShift: UInt8) -> CGBitmapInfo {
+        if redShift == 16 && greenShift == 8 && blueShift == 0 {
+            if bigEndian {
+                return CGBitmapInfo(rawValue: CGImageAlphaInfo.noneSkipFirst.rawValue | CGBitmapInfo.byteOrder32Big.rawValue)
+            }
+            return CGBitmapInfo(rawValue: CGImageAlphaInfo.noneSkipFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue)
+        }
+        if redShift == 0 && greenShift == 8 && blueShift == 16 {
+            return CGBitmapInfo(rawValue: CGImageAlphaInfo.noneSkipLast.rawValue | CGBitmapInfo.byteOrder32Big.rawValue)
+        }
+        Logger.debug("Unknown pixel format, using default", metadata: [
+            "redShift": "\(redShift)",
+            "greenShift": "\(greenShift)",
+            "blueShift": "\(blueShift)"
+        ])
+        return CGBitmapInfo(rawValue: CGImageAlphaInfo.noneSkipFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue)
+    }
+
+    /// Build a 32-bit-per-pixel image. Returns nil when the buffer is smaller than `width * height * 4`.
+    static func makeImage(
+        pixels: [UInt8], width: Int, height: Int,
+        bigEndian: Bool, redShift: UInt8, greenShift: UInt8, blueShift: UInt8
+    ) -> CGImage? {
+        guard width > 0, height > 0, pixels.count >= width * height * 4,
+              let provider = CGDataProvider(data: Data(pixels) as CFData) else { return nil }
+        return CGImage(
+            width: width,
+            height: height,
+            bitsPerComponent: 8,
+            bitsPerPixel: 32,
+            bytesPerRow: width * 4,
+            space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: bitmapInfo(bigEndian: bigEndian, redShift: redShift, greenShift: greenShift, blueShift: blueShift),
+            provider: provider,
+            decode: nil,
+            shouldInterpolate: false,
+            intent: .defaultIntent
+        )
+    }
+
     /// Request and receive a framebuffer update from the VNC server
     /// Returns the framebuffer as a CGImage
-    func captureFramebuffer() async throws -> CGImage {
+    ///
+    /// An update can consist only of a DesktopSize pseudo-rectangle (and cursor data), for example the first reply
+    /// after connecting to a guest whose display is still being configured. Such a reply carries no pixels, so it
+    /// is never turned into an image (previously: an all-black buffer, sized for the old geometry); the full
+    /// framebuffer is requested again at the new size, up to `maxAttempts` times.
+    func captureFramebuffer(maxAttempts: Int = 4) async throws -> CGImage {
         guard isConnected else {
             Logger.debug("VNCClient.captureFramebuffer: not connected")
             throw VNCClientError.notConnected
         }
 
-        Logger.debug("VNCClient.captureFramebuffer: requesting framebuffer", metadata: [
-            "width": "\(frameBufferWidth)",
-            "height": "\(frameBufferHeight)"
-        ])
+        for attempt in 1...max(1, maxAttempts) {
+            Logger.debug("VNCClient.captureFramebuffer: requesting framebuffer", metadata: [
+                "width": "\(frameBufferWidth)",
+                "height": "\(frameBufferHeight)",
+                "attempt": "\(attempt)"
+            ])
 
-        // Send FramebufferUpdateRequest
-        // Message type 3: request full framebuffer
-        var request = Data(capacity: 10)
-        request.append(3)  // Message type 3 = FramebufferUpdateRequest
-        request.append(0)  // Incremental = 0 (request full update)
-        request.append(contentsOf: withUnsafeBytes(of: UInt16(0).bigEndian) { Array($0) })  // x-position
-        request.append(contentsOf: withUnsafeBytes(of: UInt16(0).bigEndian) { Array($0) })  // y-position
-        request.append(contentsOf: withUnsafeBytes(of: frameBufferWidth.bigEndian) { Array($0) })  // width
-        request.append(contentsOf: withUnsafeBytes(of: frameBufferHeight.bigEndian) { Array($0) })  // height
+            // FramebufferUpdateRequest (type 3), non-incremental, whole screen
+            var request = Data(capacity: 10)
+            request.append(3)
+            request.append(0)
+            request.append(contentsOf: withUnsafeBytes(of: UInt16(0).bigEndian) { Array($0) })
+            request.append(contentsOf: withUnsafeBytes(of: UInt16(0).bigEndian) { Array($0) })
+            request.append(contentsOf: withUnsafeBytes(of: frameBufferWidth.bigEndian) { Array($0) })
+            request.append(contentsOf: withUnsafeBytes(of: frameBufferHeight.bigEndian) { Array($0) })
+            try await send(data: request)
 
-        try await send(data: request)
+            let header = try await receive(length: 4)
+            guard header[0] == 0 else {
+                throw VNCClientError.receiveFailed("Unexpected message type: \(header[0])")
+            }
+            let numRectangles = UInt16(bigEndian: header.withUnsafeBytes { $0.load(fromByteOffset: 2, as: UInt16.self) })
 
-        // Read FramebufferUpdate response
-        let header = try await receive(length: 4)
-        let messageType = header[0]
+            let bytesPerPixel = 4
+            var stride = Int(frameBufferWidth) * bytesPerPixel
+            var pixelData = [UInt8](repeating: 0, count: Int(frameBufferWidth) * Int(frameBufferHeight) * bytesPerPixel)
+            var sawPixels = false
 
-        guard messageType == 0 else {
-            throw VNCClientError.receiveFailed("Unexpected message type: \(messageType)")
-        }
+            for _ in 0..<numRectangles {
+                // Rectangle header: x (2) + y (2) + width (2) + height (2) + encoding (4) = 12 bytes
+                let rectHeader = try await receive(length: 12)
+                let x = UInt16(bigEndian: rectHeader.withUnsafeBytes { $0.load(fromByteOffset: 0, as: UInt16.self) })
+                let y = UInt16(bigEndian: rectHeader.withUnsafeBytes { $0.load(fromByteOffset: 2, as: UInt16.self) })
+                let width = UInt16(bigEndian: rectHeader.withUnsafeBytes { $0.load(fromByteOffset: 4, as: UInt16.self) })
+                let height = UInt16(bigEndian: rectHeader.withUnsafeBytes { $0.load(fromByteOffset: 6, as: UInt16.self) })
+                let encoding = Int32(bigEndian: rectHeader.withUnsafeBytes { $0.load(fromByteOffset: 8, as: Int32.self) })
 
-        // header[1] is padding
-        let numRectangles = UInt16(bigEndian: header.withUnsafeBytes { $0.load(fromByteOffset: 2, as: UInt16.self) })
-
-        // Allocate pixel buffer (BGRA format, 4 bytes per pixel)
-        let bytesPerPixel = 4
-        let stride = Int(frameBufferWidth) * bytesPerPixel
-        var pixelData = [UInt8](repeating: 0, count: Int(frameBufferWidth) * Int(frameBufferHeight) * bytesPerPixel)
-
-        // Process each rectangle
-        for _ in 0..<numRectangles {
-            // Rectangle header: x (2) + y (2) + width (2) + height (2) + encoding (4) = 12 bytes
-            let rectHeader = try await receive(length: 12)
-
-            let x = UInt16(bigEndian: rectHeader.withUnsafeBytes { $0.load(fromByteOffset: 0, as: UInt16.self) })
-            let y = UInt16(bigEndian: rectHeader.withUnsafeBytes { $0.load(fromByteOffset: 2, as: UInt16.self) })
-            let width = UInt16(bigEndian: rectHeader.withUnsafeBytes { $0.load(fromByteOffset: 4, as: UInt16.self) })
-            let height = UInt16(bigEndian: rectHeader.withUnsafeBytes { $0.load(fromByteOffset: 6, as: UInt16.self) })
-            let encoding = Int32(bigEndian: rectHeader.withUnsafeBytes { $0.load(fromByteOffset: 8, as: Int32.self) })
-
-            // Handle different encodings
-            switch encoding {
-            case 0:  // Raw encoding
-                let rectPixelCount = Int(width) * Int(height) * bytesPerPixel
-                let rectData = try await receive(length: rectPixelCount)
-
-                // Copy rectangle data into the pixel buffer
-                for row in 0..<Int(height) {
-                    let srcOffset = row * Int(width) * bytesPerPixel
-                    let dstY = Int(y) + row
-                    let dstOffset = dstY * stride + Int(x) * bytesPerPixel
-
-                    for col in 0..<Int(width) * bytesPerPixel {
-                        if dstOffset + col < pixelData.count && srcOffset + col < rectData.count {
+                switch encoding {
+                case 0:  // Raw encoding
+                    let rectPixelCount = Int(width) * Int(height) * bytesPerPixel
+                    let rectData = try await receive(length: rectPixelCount)
+                    for row in 0..<Int(height) {
+                        let srcOffset = row * Int(width) * bytesPerPixel
+                        let dstOffset = (Int(y) + row) * stride + Int(x) * bytesPerPixel
+                        for col in 0..<Int(width) * bytesPerPixel
+                        where dstOffset + col < pixelData.count && srcOffset + col < rectData.count {
                             pixelData[dstOffset + col] = rectData[srcOffset + col]
                         }
                     }
+                    sawPixels = true
+
+                case -239:  // Cursor pseudo-encoding: pixels + bitmask
+                    let cursorPixels = Int(width) * Int(height) * bytesPerPixel
+                    let cursorBitmask = ((Int(width) + 7) / 8) * Int(height)
+                    _ = try await receive(length: cursorPixels + cursorBitmask)
+                    Logger.debug("Skipped cursor encoding", metadata: ["width": "\(width)", "height": "\(height)"])
+
+                case -223:  // DesktopSize pseudo-encoding: geometry only, no pixel data
+                    frameBufferWidth = width
+                    frameBufferHeight = height
+                    stride = Int(width) * bytesPerPixel
+                    pixelData = [UInt8](repeating: 0, count: Int(width) * Int(height) * bytesPerPixel)
+                    sawPixels = false  // anything drawn for the old geometry is gone
+                    Logger.debug("Desktop size changed", metadata: ["width": "\(width)", "height": "\(height)"])
+
+                case -224:  // LastRect pseudo-encoding
+                    Logger.debug("LastRect encoding received")
+
+                default:
+                    Logger.debug("Unsupported VNC encoding (skipping)", metadata: ["encoding": "\(encoding)"])
                 }
-
-            case -239:  // Cursor pseudo-encoding
-                // Cursor data: pixels (width * height * bytesPerPixel) + bitmask ((width+7)/8 * height)
-                let cursorPixels = Int(width) * Int(height) * bytesPerPixel
-                let bitmaskRowBytes = (Int(width) + 7) / 8
-                let cursorBitmask = bitmaskRowBytes * Int(height)
-                _ = try await receive(length: cursorPixels + cursorBitmask)
-                Logger.debug("Skipped cursor encoding", metadata: ["width": "\(width)", "height": "\(height)"])
-
-            case -223:  // DesktopSize pseudo-encoding
-                // No additional data, just updates dimensions
-                frameBufferWidth = width
-                frameBufferHeight = height
-                Logger.debug("Desktop size changed", metadata: ["width": "\(width)", "height": "\(height)"])
-
-            case -224:  // LastRect pseudo-encoding
-                // No additional data, signals end of rectangles
-                Logger.debug("LastRect encoding received")
-                break
-
-            default:
-                // For unsupported encodings, log and skip
-                Logger.debug("Unsupported VNC encoding (skipping)", metadata: ["encoding": "\(encoding)"])
-                // Try to continue instead of throwing - some encodings have no extra data
             }
-        }
 
-        // Create CGImage from pixel data
-        // Determine the correct pixel format based on server's pixel format
-        // VNC typically sends pixels as: [padding/alpha][R][G][B] or [B][G][R][padding/alpha]
-        // depending on the shift values
-        let colorSpace = CGColorSpaceCreateDeviceRGB()
-
-        // Determine bitmap info based on server pixel format
-        // Common formats from Apple VNC:
-        // - redShift=16, greenShift=8, blueShift=0 = ARGB/XRGB (alpha/skip first, big endian within pixel)
-        // - redShift=0, greenShift=8, blueShift=16 = BGRA/BGRX (alpha/skip last)
-        let bitmapInfo: CGBitmapInfo
-        if redShift == 16 && greenShift == 8 && blueShift == 0 {
-            // ARGB format - standard macOS format
-            // In memory: [A/X][R][G][B] for big endian, [B][G][R][A/X] for little endian
-            if bigEndianFlag != 0 {
-                bitmapInfo = CGBitmapInfo(rawValue: CGImageAlphaInfo.noneSkipFirst.rawValue | CGBitmapInfo.byteOrder32Big.rawValue)
-            } else {
-                // Little endian: bytes are [B][G][R][X] which CGImage interprets as BGRX
-                bitmapInfo = CGBitmapInfo(rawValue: CGImageAlphaInfo.noneSkipLast.rawValue | CGBitmapInfo.byteOrder32Little.rawValue)
+            guard sawPixels else {
+                Logger.debug("VNCClient.captureFramebuffer: update carried no pixels, requesting again", metadata: ["attempt": "\(attempt)"])
+                continue
             }
-        } else if redShift == 0 && greenShift == 8 && blueShift == 16 {
-            // RGBA/RGBX format
-            bitmapInfo = CGBitmapInfo(rawValue: CGImageAlphaInfo.noneSkipLast.rawValue | CGBitmapInfo.byteOrder32Big.rawValue)
-        } else {
-            // Default fallback - assume little endian BGRA
-            Logger.debug("Unknown pixel format, using default", metadata: [
-                "redShift": "\(redShift)",
-                "greenShift": "\(greenShift)",
-                "blueShift": "\(blueShift)"
-            ])
-            bitmapInfo = CGBitmapInfo(rawValue: CGImageAlphaInfo.noneSkipFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue)
+            guard let image = VNCClient.makeImage(
+                pixels: pixelData, width: Int(frameBufferWidth), height: Int(frameBufferHeight),
+                bigEndian: bigEndianFlag != 0, redShift: redShift, greenShift: greenShift, blueShift: blueShift
+            ) else {
+                throw VNCClientError.receiveFailed("Failed to create CGImage from framebuffer")
+            }
+            return image
         }
-
-        guard let provider = CGDataProvider(data: Data(pixelData) as CFData),
-              let cgImage = CGImage(
-                  width: Int(frameBufferWidth),
-                  height: Int(frameBufferHeight),
-                  bitsPerComponent: 8,
-                  bitsPerPixel: 32,
-                  bytesPerRow: stride,
-                  space: colorSpace,
-                  bitmapInfo: bitmapInfo,
-                  provider: provider,
-                  decode: nil,
-                  shouldInterpolate: false,
-                  intent: .defaultIntent
-              ) else {
-            throw VNCClientError.receiveFailed("Failed to create CGImage from framebuffer")
-        }
-
-        return cgImage
+        throw VNCClientError.receiveFailed("No framebuffer pixels received after \(max(1, maxAttempts)) requests")
     }
 
     /// Disconnect from the server
