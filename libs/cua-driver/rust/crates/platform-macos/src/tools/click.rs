@@ -560,7 +560,7 @@ impl ClickTool {
             let prompt = PromptInput::from_args(&args);
             let result = tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
                 if session_transport {
-                    return crate::input::mouse::click_at_xy_session(sx, sy, count, &btn);
+                    return crate::input::mouse::click_at_xy_session(prompt, sx, sy, count, &btn);
                 }
                 // Desktop scope is explicitly foreground and vision-driven: post
                 // at the global HID tap so WindowServer delivers to the window

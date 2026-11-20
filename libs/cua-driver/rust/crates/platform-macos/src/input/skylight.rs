@@ -348,14 +348,19 @@ pub fn enter_exact_window_key_for_sheet_dismissal(
     enter_exact_window_key_scoped(pid, target_wid, true)
 }
 
+/// The window key goes back to: the focused window's own id (a sheet stays a sheet,
+/// never its parent), whichever sheet scope the focus was read with.
+fn previous_key_window(focus: KeyFocus) -> Option<u32> {
+    focus.window.map(|window| window.own)
+}
+
 fn enter_exact_window_key_scoped(
     pid: pid_t,
     target_wid: u32,
     sheet_aware: bool,
 ) -> Result<WindowKeyScope, String> {
     // The window key goes back to is the raw AX-focused window (a sheet stays a sheet).
-    let before = key_focus_of_pid(pid, sheet_aware);
-    let previous = before.window.map(|window| window.own);
+    let previous = previous_key_window(key_focus_of_pid(pid, sheet_aware));
     let order_before = app_window_order(pid);
     let primed = prime_exact_window_key(
         target_wid,
@@ -1813,6 +1818,22 @@ mod key_prime_tests {
             );
             assert!(r.unwrap_err().contains("no keys were sent"));
         }
+    }
+
+    /// Key goes back to the raw focused window: a sheet stays a sheet, never its parent.
+    #[test]
+    fn the_previous_key_window_is_the_raw_focused_window() {
+        let sheet = KeyFocus {
+            window: Some(AxWindowId { own: 20, root: 10 }),
+            element_window: Some(20),
+        };
+        for sheet_aware in [true, false] {
+            assert_eq!(
+                super::previous_key_window(sheet.with_sheet_scope(sheet_aware)),
+                Some(20)
+            );
+        }
+        assert_eq!(super::previous_key_window(at(None, None)), None);
     }
 
     #[test]

@@ -176,7 +176,14 @@ static SESSION_MOUSE_EVENT_NUMBER: std::sync::atomic::AtomicI64 =
 /// physical modifier transitions, and a `Private` event source so the HID system
 /// state (the user's physical keyboard/modifiers) is neither read nor changed. The
 /// events carry the point themselves. Modifier clicks are not supported here.
-pub fn click_at_xy_session(x: f64, y: f64, count: usize, button: &str) -> anyhow::Result<()> {
+pub fn click_at_xy_session(
+    prompt: PromptInput,
+    x: f64,
+    y: f64,
+    count: usize,
+    button: &str,
+) -> anyhow::Result<()> {
+    crate::security_prompt::refuse_point(prompt, x, y)?;
     use core_graphics::event::{CGEventTapLocation, EventField};
     let source = CGEventSource::new(CGEventSourceStateID::Private)
         .map_err(|_| anyhow::anyhow!("CGEventSource::new failed"))?;
@@ -297,6 +304,24 @@ mod session_click_tests {
     #[test]
     fn a_zero_count_still_clicks_once() {
         assert_eq!(plan_session_click(0, 1).len(), 2);
+    }
+
+    /// The session-tap click is refused on a security prompt before any event is
+    /// created, like every HID primitive.
+    #[test]
+    fn a_session_click_is_refused_on_a_security_prompt() {
+        use crate::security_prompt::{fixture::PromptShown, PromptProtected};
+        use cua_driver_core::security_prompt::PromptInput;
+        let _prompt = PromptShown::start();
+        let error = super::click_at_xy_session(PromptInput::Refuse, 5.0, 5.0, 1, "left")
+            .expect_err("session click onto a prompt");
+        assert_eq!(
+            error
+                .downcast_ref::<PromptProtected>()
+                .map(|p| p.owner.as_str()),
+            Some("SecurityAgent"),
+            "{error}"
+        );
     }
 }
 

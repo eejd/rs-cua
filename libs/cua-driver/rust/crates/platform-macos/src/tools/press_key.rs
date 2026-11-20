@@ -380,8 +380,7 @@ impl Tool for PressKeyTool {
         // any key (or focus click) goes out; otherwise refuse (window_not_key).
         // Only a plain Escape may treat a focused sheet attached to the addressed window as
         // the key window: Return, text and chords are never routed into a sheet.
-        let sheet_dismissal = modifiers.is_empty()
-            && matches!(key_raw.to_ascii_lowercase().as_str(), "escape" | "esc");
+        let sheet_dismissal = is_sheet_dismissal(&key_raw, &modifiers);
         let _key_scope =
             match super::acquire_key_scope_for(pid, window_id, fg, sheet_dismissal).await {
                 Ok(scope) => scope,
@@ -552,9 +551,29 @@ impl Tool for PressKeyTool {
     }
 }
 
+/// Only a plain Escape (no modifiers) may treat a focused sheet attached to the
+/// addressed window as the key window; Return, text and chords never are.
+fn is_sheet_dismissal(key: &str, modifiers: &[String]) -> bool {
+    modifiers.is_empty() && matches!(key.to_ascii_lowercase().as_str(), "escape" | "esc")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_a_plain_escape_is_a_sheet_dismissal() {
+        let none: Vec<String> = vec![];
+        for key in ["escape", "Escape", "esc", "ESC"] {
+            assert!(is_sheet_dismissal(key, &none), "{key}");
+        }
+        for key in ["return", "enter", "a", "space", "tab", "escapes"] {
+            assert!(!is_sheet_dismissal(key, &none), "{key}");
+        }
+        let shift = vec!["shift".to_string()];
+        assert!(!is_sheet_dismissal("escape", &shift));
+        assert!(!is_sheet_dismissal("esc", &["cmd".to_string()]));
+    }
 
     #[test]
     fn targeted_key_requires_focus_readback_before_dispatch() {
