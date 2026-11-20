@@ -305,7 +305,9 @@ pub fn post_window_key_records(pid: pid_t, current: Option<u32>, target: u32) ->
 fn await_key_focus(pid: pid_t, target: u32, budget: std::time::Duration, sheet_aware: bool) {
     std::thread::sleep(KEY_RECORD_SETTLE);
     let deadline = std::time::Instant::now() + budget;
-    while !key_focus_of_pid(pid, sheet_aware).settled_on(target) && std::time::Instant::now() < deadline {
+    while !key_focus_of_pid(pid, sheet_aware).settled_on(target)
+        && std::time::Instant::now() < deadline
+    {
         std::thread::sleep(std::time::Duration::from_millis(40));
     }
 }
@@ -361,14 +363,24 @@ fn enter_exact_window_key_scoped(
         || {
             let ok = post_window_key_records(pid, previous, target_wid);
             if ok {
-                await_key_focus(pid, target_wid, std::time::Duration::from_millis(400), sheet_aware);
+                await_key_focus(
+                    pid,
+                    target_wid,
+                    std::time::Duration::from_millis(400),
+                    sheet_aware,
+                );
             }
             ok
         },
         || {
             let ok = set_app_focused_window(pid, target_wid);
             if ok {
-                await_key_focus(pid, target_wid, std::time::Duration::from_millis(200), sheet_aware);
+                await_key_focus(
+                    pid,
+                    target_wid,
+                    std::time::Duration::from_millis(200),
+                    sheet_aware,
+                );
             }
             ok
         },
@@ -1793,7 +1805,12 @@ mod key_prime_tests {
             element_window: Some(10),
         };
         for sheet_aware in [true, false] {
-            let r = prime_exact_window_key(20, || parent.with_sheet_scope(sheet_aware), || false, || false);
+            let r = prime_exact_window_key(
+                20,
+                || parent.with_sheet_scope(sheet_aware),
+                || false,
+                || false,
+            );
             assert!(r.unwrap_err().contains("no keys were sent"));
         }
     }

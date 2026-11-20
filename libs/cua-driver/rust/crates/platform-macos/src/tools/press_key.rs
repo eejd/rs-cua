@@ -382,10 +382,11 @@ impl Tool for PressKeyTool {
         // the key window: Return, text and chords are never routed into a sheet.
         let sheet_dismissal = modifiers.is_empty()
             && matches!(key_raw.to_ascii_lowercase().as_str(), "escape" | "esc");
-        let _key_scope = match super::acquire_key_scope_for(pid, window_id, fg, sheet_dismissal).await {
-            Ok(scope) => scope,
-            Err(refusal) => return refusal,
-        };
+        let _key_scope =
+            match super::acquire_key_scope_for(pid, window_id, fg, sheet_dismissal).await {
+                Ok(scope) => scope,
+                Err(refusal) => return refusal,
+            };
 
         // px form: pixel-click to focus, then the key goes to the focused element.
         // Reuses click's translation + delivery_mode; after it, deliver via the

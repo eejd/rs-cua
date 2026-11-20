@@ -2615,7 +2615,10 @@ mod pointer_transport_tests {
             let result = tool.invoke(case.clone()).await;
             assert_eq!(result.is_error, Some(true), "{case}");
             assert_eq!(
-                result.structured_content.as_ref().and_then(|v| v["code"].as_str()),
+                result
+                    .structured_content
+                    .as_ref()
+                    .and_then(|v| v["code"].as_str()),
                 Some("invalid_arguments"),
                 "{case}"
             );

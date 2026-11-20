@@ -578,7 +578,8 @@ pub(crate) async fn acquire_key_scope_for(
     let Some(wid) = window_id.filter(|_| !foreground) else {
         return Ok(None);
     };
-    match tokio::task::spawn_blocking(move || key_scope_for(pid, Some(wid), sheet_dismissal)).await {
+    match tokio::task::spawn_blocking(move || key_scope_for(pid, Some(wid), sheet_dismissal)).await
+    {
         Ok(Ok(scope)) => Ok(scope),
         Ok(Err(_)) if crate::input::skylight::windowserver_connection_invalid() => {
             Err(windowserver_connection_refusal(pid, Some(wid)))

@@ -4,6 +4,7 @@ on:
   push:
     tags:
       - "lume-v*"
+      - "!lume-v*-local*"
   workflow_dispatch:
     inputs:
       version:
