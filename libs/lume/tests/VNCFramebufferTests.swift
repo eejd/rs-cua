@@ -108,10 +108,18 @@ struct VNCFramebufferTests {
     #expect(script.requests.count == 2)
   }
 
-  @Test("an empty Raw rectangle does not count as pixels")
+  @Test("an empty Raw rectangle does not count as pixels; a non-empty one does")
   func emptyRawIsNotPixels() async throws {
-    let script = Script([update([raw(0, 0, byte: 0)])])
-    let parsed = try await VNCClient.readFramebufferUpdate(width: 1, height: 1) { try script.read($0) }
-    #expect(parsed.sawPixels == false)
+    // readFramebufferUpdate parses the body after the 1-byte message type, so consume it first
+    let empty = Script([update([raw(0, 0, byte: 0)])])
+    _ = try empty.read(1)
+    let none = try await VNCClient.readFramebufferUpdate(width: 1, height: 1) { try empty.read($0) }
+    #expect(none.sawPixels == false)
+
+    let full = Script([update([raw(1, 1, byte: 5)])])
+    _ = try full.read(1)
+    let some = try await VNCClient.readFramebufferUpdate(width: 1, height: 1) { try full.read($0) }
+    #expect(some.sawPixels == true)
+    #expect(some.pixels == [5, 5, 5, 5])
   }
 }
