@@ -1133,6 +1133,34 @@ mod tests {
         assert!(invalid_predicate_message(&[by_id("evidence-note", None)]).is_none());
     }
 
+    /// The published wire form of a `WindowObservation` keeps its `id`, so a
+    /// selector by `id` finds display-only text through the real publish path.
+    #[test]
+    fn a_published_observation_id_selects_display_only_text() {
+        let mut state = json!({"elements": [], "elements_complete": false});
+        crate::element_query::publish_observations(
+            &mut state,
+            vec![cua_driver_contract::WindowObservation {
+                role: "AXStaticText".into(),
+                depth: 1,
+                id: Some("submission-status".into()),
+                label: Some("Submission status".into()),
+                value: Some("Submitted".into()),
+                frame: None,
+                parent_index: None,
+                in_web_content: None,
+            }],
+            None,
+        );
+        assert_eq!(state["observations"][0]["id"], "submission-status");
+        let snapshot = snapshot_of(&state);
+        let outcomes =
+            evaluate_predicates(&[by_id("submission-status", Some("Submitted"))], &snapshot);
+        assert_eq!(outcomes[0].status, VerificationStatus::Satisfied);
+        let outcomes = evaluate_predicates(&[by_id("submission-status", Some("nope"))], &snapshot);
+        assert_eq!(outcomes[0].status, VerificationStatus::Unsatisfied);
+    }
+
     #[test]
     fn addressable_match_wins_over_its_display_only_caption() {
         // The slider's caption is a separate display-only row carrying the
