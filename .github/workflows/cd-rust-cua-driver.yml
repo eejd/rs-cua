@@ -72,6 +72,7 @@ on:
   push:
     tags:
       - "cua-driver-rs-v*"
+      - "!cua-driver-rs-v*-local*"
   workflow_dispatch:
     inputs:
       version:
