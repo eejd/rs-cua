@@ -282,10 +282,18 @@ pub struct WindowElement {
     pub enabled: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub selected: Option<bool>,
+    /// Whether the element is a password field. Windows reports it from UIA
+    /// `IsPassword`: `false` only on `Edit` controls, absent when unknown.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub is_password: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub in_web_content: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub actions: Option<Vec<String>>,
+    /// macOS only: application-defined actions, with a readable name and the
+    /// exact action envelope accepted by `click`. Windows and Linux omit this.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub custom_actions: Option<Vec<ElementCustomAction>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parent_index: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -294,6 +302,37 @@ pub struct WindowElement {
     pub min: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max: Option<f64>,
+}
+
+/// A readable native row with no action handle: static text, a label, a
+/// read-only value. It comes from the same walk as `elements`, carries no
+/// `element_index` or `element_token`, and no action tool accepts it.
+/// `parent_index` names the nearest addressable ancestor in `elements`.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, uniffi::Record)]
+pub struct WindowObservation {
+    pub role: String,
+    pub depth: u32,
+    /// Developer-assigned identifier published by the platform accessibility
+    /// provider (macOS `AXIdentifier`). Absent when the row has none or is web
+    /// content.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub value: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub frame: Option<ElementFrame>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_index: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub in_web_content: Option<bool>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, uniffi::Record)]
+pub struct ElementCustomAction {
+    pub name: String,
+    pub raw: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, uniffi::Record)]
@@ -316,6 +355,13 @@ pub struct WindowStateOutput {
     pub tree_markdown: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub elements: Option<Vec<WindowElement>>,
+    /// Display-only rows of the same walk. Absent means the platform did not
+    /// observe them, never that the window has none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub observations: Option<Vec<WindowObservation>>,
+    /// True when `observations` stopped at its row cap.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub observations_truncated: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub element_count: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
