@@ -3,14 +3,17 @@
 *Provisional: the branch model below is planned while the uirunner full-workflow
 tests are still being brought to green; review as needed.*
 
-`main` mirrors `trycua/cua` `main` (fast-forward only). `local` is rebuilt on each
-upstream release: the release tag it is cut from, plus a `--no-ff` merge of each
-verified `feat/*` branch listed below. Each `feat/*` branch is itself cut from the
-same release tag, so it can later become an upstream PR unchanged. Tags on `local`
-are `cua-driver-rs-v<base>-local<NN>` (the repo is a monorepo and cua-driver releases
-use the component tag prefix `cua-driver-rs-v`; the `v<base>-local<NN>` shape of
-docs/development-model.md in eejd/macports-ports-local gets this prefix). A tag is
-immutable; `local` itself is rewritten when it is rebuilt on a newer release.
+`main` mirrors `trycua/cua` `main` (fast-forward only, never edited). `local` is the integration
+branch: upstream release tags are **merged** into it (`git merge --no-ff <release tag>`; never
+rebased, never force-pushed once a tag exists), and each verified change branch (`feat/*`, `fix/*`)
+listed below is merged into it with `--no-ff`. Each change branch is cut from an upstream release
+tag, so it can later become a selective upstream PR unchanged. Tags on `local`
+are `<component prefix><base>-local<NN>` (the repo is a monorepo: `cua-driver-rs-v<base>-local<NN>`,
+`lume-v<base>-local<NN>`; the `v<base>-local<NN>` shape of docs/development-model.md in
+eejd/macports-ports-local gets the component prefix). A tag is immutable and stays reachable
+from `local`. When upstream merges one of our changes, the next upstream merge brings it in and the
+change branch is retired. Only an unpublished (never tagged, never consumed) change branch may be
+rebased onto a newer release tag.
 
 | What | Branch | Source | Upstream status |
 |---|---|---|---|
