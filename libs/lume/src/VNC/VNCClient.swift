@@ -304,8 +304,8 @@ actor VNCClient {
     ///
     /// A little-endian ARGB/XRGB server (red 16, green 8, blue 0) sends bytes [B][G][R][X]. That is
     /// `noneSkipFirst | byteOrder32Little`. The previous `noneSkipLast | byteOrder32Little` is accepted
-    /// by `CGImage` (checked at 2x1, 1280x720 and 1920x1440) but reads the bytes with the wrong channel
-    /// order (red and green swapped), so colours were wrong.
+    /// by `CGImage` (checked at 2x1, 1280x720 and 1920x1440) but reads the channels from the wrong bytes
+    /// (a red pixel read back green, a blue one black), so colours were wrong.
     static func bitmapInfo(bigEndian: Bool, redShift: UInt8, greenShift: UInt8, blueShift: UInt8) -> CGBitmapInfo {
         if redShift == 16 && greenShift == 8 && blueShift == 0 {
             if bigEndian {
