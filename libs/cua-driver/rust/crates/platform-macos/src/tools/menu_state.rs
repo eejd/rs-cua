@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 //! Read-only observation of an element's own menu items.
 //!
 //! Shared by `set_value` (popup selection) and `click` (settling a successful

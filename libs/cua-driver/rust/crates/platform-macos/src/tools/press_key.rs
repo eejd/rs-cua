@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Cua AI, Inc.
+
 use async_trait::async_trait;
 use core_foundation::base::CFRelease;
 use cua_driver_contract::PressKeyInput;
@@ -20,6 +23,7 @@ use crate::ax::bindings::{
 };
 use crate::focus_guard;
 use crate::window_change_detector::WindowChangeDetector;
+use cua_driver_core::security_prompt::PromptInput;
 
 use super::ToolState;
 
@@ -197,6 +201,9 @@ fn with_confirmed_key_focus<T>(
 }
 
 fn delivery_failed(error: anyhow::Error) -> ToolResult {
+    if let Some(refusal) = crate::security_prompt::tool_result(&error) {
+        return refusal;
+    }
     if error.is::<KeyFocusUnconfirmed>() {
         return ToolResult::error(error.to_string()).with_structured(serde_json::json!({
             "code": "target_focus_unconfirmed", "effect": "refused", "dispatched": false,
@@ -266,9 +273,10 @@ impl Tool for PressKeyTool {
             let key = input.key;
             let modifiers = input.modifiers.unwrap_or_default();
             let key_for_input = key.clone();
+            let prompt = PromptInput::from_args(&args);
             let result = tokio::task::spawn_blocking(move || {
                 let modifier_refs: Vec<&str> = modifiers.iter().map(String::as_str).collect();
-                crate::input::keyboard::press_key_global(&key_for_input, &modifier_refs)
+                crate::input::keyboard::press_key_global(prompt, &key_for_input, &modifier_refs)
             })
             .await;
             return match result {
@@ -278,7 +286,11 @@ impl Tool for PressKeyTool {
                         "path": "hid",
                         "effect": "unverifiable"
                     })),
-                Ok(Err(error)) => ToolResult::error(format!("desktop press_key failed: {error}")),
+                Ok(Err(error)) => {
+                    crate::security_prompt::tool_result(&error).unwrap_or_else(|| {
+                        ToolResult::error(format!("desktop press_key failed: {error}"))
+                    })
+                }
                 Err(error) => ToolResult::error(format!("desktop press_key task failed: {error}")),
             };
         }
@@ -368,12 +380,12 @@ impl Tool for PressKeyTool {
         // any key (or focus click) goes out; otherwise refuse (window_not_key).
         // Only a plain Escape may treat a focused sheet attached to the addressed window as
         // the key window: Return, text and chords are never routed into a sheet.
-        let sheet_dismissal = modifiers.is_empty()
-            && matches!(key_raw.to_ascii_lowercase().as_str(), "escape" | "esc");
-        let _key_scope = match super::acquire_key_scope_for(pid, window_id, fg, sheet_dismissal).await {
-            Ok(scope) => scope,
-            Err(refusal) => return refusal,
-        };
+        let sheet_dismissal = is_sheet_dismissal(&key_raw, &modifiers);
+        let _key_scope =
+            match super::acquire_key_scope_for(pid, window_id, fg, sheet_dismissal).await {
+                Ok(scope) => scope,
+                Err(refusal) => return refusal,
+            };
 
         // px form: pixel-click to focus, then the key goes to the focused element.
         // Reuses click's translation + delivery_mode; after it, deliver via the
@@ -440,6 +452,7 @@ impl Tool for PressKeyTool {
         // wildcard snapshot suppressor and the targeted FocusGuard lease.
         let prior_front = apps::frontmost_pid();
         let snapshot = WindowChangeDetector::snapshot(prior_front);
+        let prompt = PromptInput::from_args(&args);
 
         let result = focus_guard::with_focus_suppressed(
             Some(pid),
@@ -475,7 +488,11 @@ impl Tool for PressKeyTool {
                                                 pid, target,
                                             )
                                         },
-                                        || crate::input::keyboard::press_key_bare_global(&key, &m),
+                                        || {
+                                            crate::input::keyboard::press_key_bare_global(
+                                                prompt, pid, &key, &m,
+                                            )
+                                        },
                                     )
                                 },
                             )
@@ -516,11 +533,12 @@ impl Tool for PressKeyTool {
                 } else {
                     ""
                 };
-                let structured = serde_json::json!({
+                let mut structured = serde_json::json!({
                     "path": if fg { "key_events_fg" } else { "key_events" },
                     "verified": confirmed,
                     "effect": if confirmed { "confirmed" } else { "unverifiable" },
                 });
+                changes.add_window_identity(&mut structured);
                 ToolResult::text(format!(
                     "✅ Pressed {display_key} on pid {pid}{label}.{}",
                     changes.result_suffix()
@@ -533,9 +551,29 @@ impl Tool for PressKeyTool {
     }
 }
 
+/// Only a plain Escape (no modifiers) may treat a focused sheet attached to the
+/// addressed window as the key window; Return, text and chords never are.
+fn is_sheet_dismissal(key: &str, modifiers: &[String]) -> bool {
+    modifiers.is_empty() && matches!(key.to_ascii_lowercase().as_str(), "escape" | "esc")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_a_plain_escape_is_a_sheet_dismissal() {
+        let none: Vec<String> = vec![];
+        for key in ["escape", "Escape", "esc", "ESC"] {
+            assert!(is_sheet_dismissal(key, &none), "{key}");
+        }
+        for key in ["return", "enter", "a", "space", "tab", "escapes"] {
+            assert!(!is_sheet_dismissal(key, &none), "{key}");
+        }
+        let shift = vec!["shift".to_string()];
+        assert!(!is_sheet_dismissal("escape", &shift));
+        assert!(!is_sheet_dismissal("esc", &["cmd".to_string()]));
+    }
 
     #[test]
     fn targeted_key_requires_focus_readback_before_dispatch() {

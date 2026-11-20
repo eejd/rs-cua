@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Cua AI, Inc.
+
 //! Internal, non-wire representation of what an action actually did.
 //!
 //! This deliberately has no serde derives: it is the driver's source of truth,
@@ -465,6 +468,7 @@ impl ActionExecutionRecord {
             // The dispatch seam adds these after the record is projected.
             hint: None,
             next_call: None,
+            fast_path: None,
         })
     }
 
